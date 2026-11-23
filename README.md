@@ -1,5 +1,9 @@
 # VisuSic Terminal
 
+[![tests](https://github.com/Donya-12/visusic-terminal/actions/workflows/tests.yml/badge.svg)](https://github.com/Donya-12/visusic-terminal/actions/workflows/tests.yml)
+[![release](https://img.shields.io/github/v/release/Donya-12/visusic-terminal?label=release)](https://github.com/Donya-12/visusic-terminal/releases)
+[![license](https://img.shields.io/github/license/Donya-12/visusic-terminal)](LICENSE)
+
 Лёгкий визуализатор музыки для терминала Windows: караоке-лирика, таймлайн
 трека и живой эквалайзер. Один процесс, один экран, без медиатек, плагинов и
 настроек.
