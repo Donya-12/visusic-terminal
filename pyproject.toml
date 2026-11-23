@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "visusic-terminal"
+version = "0.1.0"
+description = "Tiny terminal music visualizer with karaoke lyrics, timeline and spectrum"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "Donya-12" }]
+keywords = ["music", "visualizer", "terminal", "karaoke", "lrc", "spectrum"]
+classifiers = [
+    "Environment :: Console",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio :: Visualization",
+]
+dependencies = [
+    "numpy>=1.24",
+    "soundfile>=0.13",
+    "sounddevice>=0.5",
+]
+
+[project.optional-dependencies]
+build = ["pyinstaller>=6.16"]
+
+[project.urls]
+Homepage = "https://github.com/Donya-12/visusic-terminal"
+Releases = "https://github.com/Donya-12/visusic-terminal/releases"
+
+[project.scripts]
+visusic = "visusic.cli:main"
+visusic-fetch = "visusic.fetch:main"
+
+[tool.setuptools]
+packages = ["visusic"]
