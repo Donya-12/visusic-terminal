@@ -8,7 +8,9 @@
 трека и живой эквалайзер. Один процесс, один экран, без медиатек, плагинов и
 настроек.
 
-![preview](docs/preview.png)
+[![Смотреть промо](docs/promo-thumb.jpg)](https://github.com/Donya-12/visusic-terminal/releases/download/v0.1.0/visusic-promo.mp4)
+
+[▶ Смотреть промо-видео (24 с)](https://github.com/Donya-12/visusic-terminal/releases/download/v0.1.0/visusic-promo.mp4)
 
 ## Готовый exe (без Python)
 
