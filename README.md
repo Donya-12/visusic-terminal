@@ -5,8 +5,8 @@
 [![license](https://img.shields.io/github/license/Donya-12/visusic-terminal)](LICENSE)
 
 Лёгкий визуализатор музыки для терминала Windows: караоке-лирика, таймлайн
-трека и живой эквалайзер. Один процесс, один экран, без медиатек, плагинов и
-настроек.
+трека, живой эквалайзер и цветовые темы. Один процесс, один экран, без медиатек,
+плагинов и настроек.
 
 [![Смотреть промо](docs/promo-thumb.jpg)](https://github.com/Donya-12/visusic-terminal/releases/download/v0.1.0/visusic-promo.mp4)
 
@@ -16,10 +16,12 @@
 
 Готовые сборки лежат в [Releases](https://github.com/Donya-12/visusic-terminal/releases):
 
-- `visusic-terminal-0.1.0-win64.zip` — оба exe, `README.md` и bat-файлы для
+- `visusic-terminal-win64.zip` — оба exe, `README.md` и bat-файлы для
   запуска;
 - `visusic.exe` — только плеер;
 - `visusic-fetch.exe` — только загрузчик лирики.
+
+Последняя портативная сборка: [visusic-terminal-win64.zip](https://github.com/Donya-12/visusic-terminal/releases/latest/download/visusic-terminal-win64.zip).
 
 Скачай zip, распакуй в любую папку и запусти `VisuSic.bat`. Если Windows
 покажет SmartScreen, жми «Подробнее» → «Выполнить всё равно»: exe без цифровой
@@ -75,10 +77,38 @@ python -m venv .venv
 | `N` / `P` | следующий / предыдущий трек |
 | `R` | в начало трека |
 | `[` / `]` | сдвинуть лирику на −0.2 / +0.2 с |
+| `T` | меню цветовых схем |
 | `Q` / `Esc` | выход |
 
 Когда лирика отстаёт или спешит, поправь её на слух клавишами `[` и `]`.
 Текущий сдвиг показывается в правом нижнем углу (`sync +0.4s`).
+
+## Темы
+
+Нажми `T` — откроется меню с живым предпросмотром. `↑`/`↓` переключают тему
+сразу, `Enter` применяет и сохраняет, `Esc` возвращает прежнюю, цифры `1`–`6`
+выбирают быстрым нажатием.
+
+![Темы](docs/themes.png)
+
+| Пресет | Настроение |
+| --- | --- |
+| `Aurora` | мятный акцент, фиолетово-бирюзовый спектр — тема по умолчанию |
+| `Synthwave` | неон-розовый, фиолетово-оранжевый градиент |
+| `Matrix` | зелёный CRT |
+| `Ice` | холодный голубой |
+| `Amber` | янтарный CRT |
+| `Mono` | монохром для минимализма |
+
+Выбор сохраняется в `%APPDATA%\visusic-terminal\config.json`. Для разового
+запуска без сохранения:
+
+```bat
+visusic.bat "C:\Music" --theme synthwave
+```
+
+Доступные имена: `aurora`, `synthwave`, `matrix`, `ice`, `amber`, `mono`.
+Темы рассчитаны на тёмный фон терминала (Windows Terminal по умолчанию).
 
 ## Лирика
 
@@ -169,12 +199,13 @@ fetch-lyrics.bat "C:\Music" --overwrite        :: перезаписать ст�
 | `visusic/player.py` | декодирование, ресемплинг, WASAPI-поток, позиция |
 | `visusic/spectrum.py` | FFT, логарифмические полосы, сглаживание |
 | `visusic/lrc.py` | парсер LRC, прогресс строки и слов |
-| `visusic/ui.py` | ANSI-канвас, эквалайзер, таймлайн, караоке |
+| `visusic/ui.py` | ANSI-канвас, эквалайзер, таймлайн, караоке, меню тем |
+| `visusic/theme.py` | пресеты палитр, цветовой градиент, config |
 | `visusic/app.py` | цикл, клавиши, автопереход треков |
 | `visusic/library.py` | поиск файлов и разбор имён |
 | `visusic/fetch.py` | опциональный поиск `.lrc` на LRCLIB |
 
-Тесты:
+Тесты (48 штук):
 
 ```bat
 .venv\Scripts\python -m unittest discover -s tests

@@ -11,6 +11,7 @@ from . import __version__
 from .app import App
 from .library import scan
 from .player import AudioError
+from .theme import theme_names
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -29,6 +30,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--volume", type=int, default=75,
         help="start volume in percent, 0-100 (default: 75)",
+    )
+    parser.add_argument(
+        "--theme", choices=theme_names(), default=None,
+        help="color theme for this run (default: saved theme, or aurora)",
     )
     parser.add_argument(
         "--version", action="version", version=f"visusic {__version__}",
@@ -66,6 +71,7 @@ def main(argv: list[str] | None = None) -> int:
             tracks,
             fps=max(5, min(60, args.fps)),
             volume=max(0, min(100, args.volume)) / 100.0,
+            theme=args.theme,
         )
         app.run()
     except AudioError as exc:

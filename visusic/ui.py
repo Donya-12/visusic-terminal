@@ -1,4 +1,4 @@
-"""Terminal renderer: header, spectrum, timeline and karaoke lyrics."""
+"""Terminal renderer: header, spectrum, timeline, karaoke and theme menu."""
 
 from __future__ import annotations
 
@@ -8,26 +8,33 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .lrc import Lyrics
-
-Color = tuple[int, int, int]
-
-WHITE: Color = (240, 246, 255)
-TEXT: Color = (196, 206, 222)
-DIM: Color = (104, 114, 132)
-DIM2: Color = (58, 64, 78)
-ACCENT: Color = (110, 240, 198)
-ACCENT_DIM: Color = (66, 160, 138)
-WARN: Color = (255, 194, 112)
-LYRIC_TODO: Color = (98, 108, 126)
-LYRIC_CONTEXT: Color = (86, 96, 114)
-
-_EQ_STOPS: tuple[tuple[float, Color], ...] = (
-    (0.00, (96, 74, 255)),
-    (0.30, (66, 158, 255)),
-    (0.58, (64, 232, 222)),
-    (0.82, (150, 255, 202)),
-    (1.00, (240, 255, 246)),
+from .theme import (
+    Color,
+    DEFAULT_THEME,
+    THEMES,
+    Theme,
+    get_theme,
+    mix,
 )
+
+_DEFAULT = get_theme(DEFAULT_THEME)
+
+# Backward-compatible default palette for tooling and simple callers.
+WHITE: Color = _DEFAULT.white
+TEXT: Color = _DEFAULT.text
+DIM: Color = _DEFAULT.dim
+DIM2: Color = _DEFAULT.dim2
+ACCENT: Color = _DEFAULT.accent
+ACCENT_DIM: Color = _DEFAULT.accent_dim
+WARN: Color = _DEFAULT.warn
+LYRIC_TODO: Color = _DEFAULT.lyric_todo
+LYRIC_CONTEXT: Color = _DEFAULT.lyric_context
+
+
+def eq_color(level: float) -> Color:
+    """Default-theme gradient, kept for tooling."""
+    return _DEFAULT.eq_color(level)
+
 
 _FULL_HINT = (
     ("space", " pause  "),
@@ -35,12 +42,14 @@ _FULL_HINT = (
     ("↑↓", " vol  "),
     ("n/p", " track  "),
     ("[ ]", " sync  "),
+    ("t", " theme  "),
     ("q", " quit"),
 )
 _SHORT_HINT = (
     ("spc", " play  "),
     ("←→", " seek  "),
     ("n/p", " next  "),
+    ("t", " theme  "),
     ("q", " quit"),
 )
 
@@ -96,26 +105,6 @@ def fit_text(text: str, width: int) -> str:
     return "".join(result) + "…"
 
 
-def mix(a: Color, b: Color, t: float) -> Color:
-    t = max(0.0, min(1.0, t))
-    return (
-        int(a[0] + (b[0] - a[0]) * t),
-        int(a[1] + (b[1] - a[1]) * t),
-        int(a[2] + (b[2] - a[2]) * t),
-    )
-
-
-def eq_color(level: float) -> Color:
-    level = max(0.0, min(1.0, level))
-    for i in range(1, len(_EQ_STOPS)):
-        left_t, left_c = _EQ_STOPS[i - 1]
-        right_t, right_c = _EQ_STOPS[i]
-        if level <= right_t:
-            span = right_t - left_t or 1.0
-            return mix(left_c, right_c, (level - left_t) / span)
-    return _EQ_STOPS[-1][1]
-
-
 def fmt_time(seconds: float) -> str:
     seconds = max(0.0, seconds)
     total = int(seconds)
@@ -156,6 +145,25 @@ class Canvas:
                         self.colors[y][x + 1] = color
                 x += width
         return x
+
+    def rect(self, x0: int, y0: int, x1: int, y1: int, ch: str = " ",
+             color: Color | None = None, bold: bool = False) -> None:
+        for y in range(max(0, y0), min(self.h, y1)):
+            for x in range(max(0, x0), min(self.w, x1)):
+                self.chars[y][x] = ch
+                self.colors[y][x] = color
+                self.bold[y][x] = bold
+
+    def dim(self, factor: float = 0.4) -> None:
+        for y in range(self.h):
+            for x in range(self.w):
+                color = self.colors[y][x]
+                if color is not None:
+                    self.colors[y][x] = (
+                        int(color[0] * factor),
+                        int(color[1] * factor),
+                        int(color[2] * factor),
+                    )
 
     def hline(self, y: int, x0: int, x1: int, ch: str,
               color: Color | None = None) -> None:
@@ -228,25 +236,28 @@ def _draw_right(canvas: Canvas, y: int,
     draw_segments(canvas, x, y, segments, total)
 
 
-def _draw_header(canvas: Canvas, frame: Frame) -> None:
+def _draw_header(canvas: Canvas, frame: Frame, theme: Theme) -> None:
     glyph = "▶" if frame.playing else "‖"
-    glyph_color = ACCENT if frame.playing else WARN
-    right = [(f"{frame.index + 1}/{frame.total}", DIM, False),
-             ("  ", DIM, False),
+    glyph_color = theme.accent if frame.playing else theme.warn
+    right = [(f"{frame.index + 1}/{frame.total}", theme.dim, False),
+             ("  ", theme.dim, False),
              (glyph, glyph_color, True)]
     right_width = _segments_width(right)
     _draw_right(canvas, 0, right)
 
     max_left = canvas.w - right_width - 3
-    segments: list[tuple[str, Color, bool]] = [("♫", ACCENT, True), (" ", DIM, False)]
+    segments: list[tuple[str, Color, bool]] = [
+        ("♫", theme.accent, True), (" ", theme.dim, False)
+    ]
     if frame.artist:
-        segments.append((frame.artist, DIM, False))
-        segments.append((" — ", DIM2, False))
-    segments.append((frame.title, WHITE, True))
+        segments.append((frame.artist, theme.dim, False))
+        segments.append((" — ", theme.dim2, False))
+    segments.append((frame.title, theme.white, True))
     draw_segments(canvas, 1, 0, segments, max_left)
 
 
-def _draw_eq(canvas: Canvas, frame: Frame, top: int, bottom: int) -> None:
+def _draw_eq(canvas: Canvas, frame: Frame, theme: Theme,
+             top: int, bottom: int) -> None:
     height = bottom - top + 1
     if height <= 0:
         return
@@ -265,7 +276,10 @@ def _draw_eq(canvas: Canvas, frame: Frame, top: int, bottom: int) -> None:
     bar_width = 2 if slot >= 3 else 1
     group_width = count * slot - (slot - bar_width)
     offset = margin + max(0, (available - group_width) // 2)
-    color_at = (lambda value: mix(eq_color(value), DIM2, 0.45)) if not frame.playing else eq_color
+
+    def color_at(value: float) -> Color:
+        color = theme.eq_color(value)
+        return color if frame.playing else mix(color, theme.dim2, 0.45)
 
     for i in range(count):
         value = float(bars[i])
@@ -284,44 +298,47 @@ def _draw_eq(canvas: Canvas, frame: Frame, top: int, bottom: int) -> None:
             canvas.put(x, bottom - row, block, color_at(level))
 
         if peak_row >= fill and peak > 0.03 and fill < height:
+            cap = mix(theme.white, theme.accent, 0.35) if frame.playing else theme.dim
             canvas.put(x, bottom - min(height - 1, peak_row),
-                       "▔" * bar_width,
-                       mix(WHITE, ACCENT, 0.35) if frame.playing else DIM)
+                       "▔" * bar_width, cap)
 
 
-def _draw_timeline(canvas: Canvas, frame: Frame, y: int) -> None:
+def _draw_timeline(canvas: Canvas, frame: Frame, theme: Theme, y: int) -> None:
     left = fmt_time(frame.position)
     right = fmt_time(frame.duration)
-    canvas.put(1, y, left, ACCENT_DIM if frame.playing else DIM)
+    canvas.put(1, y, left, theme.accent_dim if frame.playing else theme.dim)
 
     bar_left = 3 + text_width(left)
     bar_right = canvas.w - 1 - text_width(right) - 1
     bar_width = bar_right - bar_left
     if bar_width >= 4:
-        canvas.hline(y, bar_left, bar_right, "─", DIM2)
+        canvas.hline(y, bar_left, bar_right, "─", theme.dim2)
 
         lyrics = frame.lyrics
         if lyrics:
             duration = max(0.01, frame.duration)
             step = max(1, len(lyrics.times) // 40)
+            tick_color = mix(theme.dim2, theme.dim, 0.45)
             for stamp in lyrics.times[::step]:
                 stamp += frame.lyric_offset
                 if 0.0 <= stamp <= duration:
                     tick = bar_left + int(stamp / duration * (bar_width - 1))
                     if bar_left <= tick < bar_right:
-                        canvas.put(tick, y, "·", (78, 86, 102))
+                        canvas.put(tick, y, "·", tick_color)
 
         ratio = frame.position / frame.duration if frame.duration > 0 else 0.0
         ratio = max(0.0, min(1.0, ratio))
         filled = int(round(ratio * (bar_width - 1)))
+        fill_color = theme.accent_dim if frame.playing else theme.dim
         for x in range(bar_left, bar_left + filled):
-            canvas.put(x, y, "━", ACCENT_DIM if frame.playing else DIM)
+            canvas.put(x, y, "━", fill_color)
         head = bar_left + filled
         if 0 <= head < bar_right:
-            canvas.put(head, y, "●", ACCENT if frame.playing else TEXT, True)
+            head_color = theme.accent if frame.playing else theme.text
+            canvas.put(head, y, "●", head_color, True)
 
     right_x = canvas.w - 1 - text_width(right)
-    canvas.put(right_x, y, right, DIM)
+    canvas.put(right_x, y, right, theme.dim)
 
 
 def _lyric_window(text: str, played: int, max_width: int) -> tuple[str, int, bool, bool]:
@@ -346,7 +363,7 @@ def _lyric_window(text: str, played: int, max_width: int) -> tuple[str, int, boo
 
 
 def _draw_lyric(canvas: Canvas, y: int, text: str, played: float,
-                color_done: Color, color_todo: Color,
+                color_done: Color, color_todo: Color, theme: Theme,
                 bold_done: bool = True) -> None:
     if not text:
         return
@@ -364,27 +381,27 @@ def _draw_lyric(canvas: Canvas, y: int, text: str, played: float,
     todo = view[offset:]
     segments: list[tuple[str, Color, bool]] = []
     if prefix:
-        segments.append(("…", DIM2, False))
+        segments.append(("…", theme.dim2, False))
     if done:
         segments.append((done, color_done, bold_done))
     if todo:
         segments.append((todo, color_todo, False))
     if suffix:
-        segments.append(("…", DIM2, False))
+        segments.append(("…", theme.dim2, False))
 
     total = _segments_width(segments)
     x = max(1, (canvas.w - total) // 2)
     draw_segments(canvas, x, y, segments, total)
 
 
-def _draw_lyrics(canvas: Canvas, frame: Frame, prev_y: int, cur_y: int,
-                 next_y: int) -> None:
+def _draw_lyrics(canvas: Canvas, frame: Frame, theme: Theme,
+                 prev_y: int, cur_y: int, next_y: int) -> None:
     lyrics = frame.lyrics
     if not lyrics or not lyrics.lines:
         hint = "no lyrics · add a .lrc or run fetch-lyrics.bat"
         hint = fit_text(hint, canvas.w - 2)
         x = max(1, (canvas.w - text_width(hint)) // 2)
-        canvas.put(x, cur_y, hint, DIM)
+        canvas.put(x, cur_y, hint, theme.dim)
         return
 
     t = frame.lyric_time
@@ -392,24 +409,26 @@ def _draw_lyrics(canvas: Canvas, frame: Frame, prev_y: int, cur_y: int,
     lines = lyrics.lines
 
     if index < 0:
-        canvas.put(max(1, canvas.w // 2 - 1), cur_y, "♪", ACCENT_DIM)
+        canvas.put(max(1, canvas.w // 2 - 1), cur_y, "♪", theme.accent_dim)
         next_text = lines[0].text
-        _draw_lyric(canvas, next_y, next_text, 0.0, LYRIC_CONTEXT, LYRIC_CONTEXT)
+        _draw_lyric(canvas, next_y, next_text, 0.0,
+                    theme.lyric_context, theme.lyric_context, theme)
         return
 
     current = lines[index]
     progress = lyrics.progress(index, t)
-    _draw_lyric(canvas, cur_y, current.text, progress, WHITE, LYRIC_TODO)
+    _draw_lyric(canvas, cur_y, current.text, progress,
+                theme.white, theme.lyric_todo, theme)
 
     if index > 0:
         _draw_lyric(canvas, prev_y, lines[index - 1].text, 1.0,
-                    LYRIC_CONTEXT, LYRIC_CONTEXT, False)
+                    theme.lyric_context, theme.lyric_context, theme, False)
     if index + 1 < len(lines):
         _draw_lyric(canvas, next_y, lines[index + 1].text, 0.0,
-                    LYRIC_CONTEXT, LYRIC_CONTEXT, False)
+                    theme.lyric_context, theme.lyric_context, theme, False)
 
 
-def _draw_footer(canvas: Canvas, frame: Frame) -> None:
+def _draw_footer(canvas: Canvas, frame: Frame, theme: Theme) -> None:
     y = canvas.h - 1
     right = f"vol {int(round(frame.volume * 100))}%"
     if abs(frame.lyric_offset) >= 0.05:
@@ -419,56 +438,131 @@ def _draw_footer(canvas: Canvas, frame: Frame) -> None:
     limit = canvas.w - (right_width + 3 if show_right else 2)
 
     if frame.status:
-        canvas.put(1, y, fit_text(frame.status, limit), WARN)
+        canvas.put(1, y, fit_text(frame.status, limit), theme.warn)
     else:
         hints = _FULL_HINT if _segments_width(
-            [(key, ACCENT, True) for key, _ in _FULL_HINT]
+            [(key, theme.accent, True) for key, _ in _FULL_HINT]
         ) + sum(text_width(label) for _, label in _FULL_HINT) <= limit else _SHORT_HINT
 
         x = 1
         for key, label in hints:
             if x >= limit:
                 break
-            x = canvas.put(x, y, key, ACCENT if frame.playing else DIM, True)
-            x = canvas.put(x, y, label, DIM)
+            x = canvas.put(x, y, key,
+                           theme.accent if frame.playing else theme.dim, True)
+            x = canvas.put(x, y, label, theme.dim)
 
     if show_right:
-        canvas.put(canvas.w - 1 - right_width, y, right, DIM2)
+        canvas.put(canvas.w - 1 - right_width, y, right, theme.dim2)
+
+
+# -------------------------------------------------------------------- menu
+def _draw_theme_menu(canvas: Canvas, theme: Theme, selected: int) -> None:
+    themes = list(THEMES.values())
+    selected = max(0, min(len(themes) - 1, int(selected)))
+    box_w = min(46, max(20, canvas.w - 4))
+    rows = min(len(themes), max(2, canvas.h - 6))
+    box_h = rows + 4
+    x = max(0, (canvas.w - box_w) // 2)
+    y = max(0, (canvas.h - box_h) // 2)
+
+    canvas.rect(x, y, x + box_w, y + box_h)
+    canvas.put(x, y, "┌" + "─" * (box_w - 2) + "┐", theme.accent_dim)
+    for row in range(y + 1, y + box_h - 1):
+        canvas.put(x, row, "│", theme.accent_dim)
+        canvas.put(x + box_w - 1, row, "│", theme.accent_dim)
+    canvas.put(x, y + box_h - 1, "└" + "─" * (box_w - 2) + "┘",
+               theme.accent_dim)
+
+    canvas.put(x + 2, y + 1, "COLOR THEME", theme.accent, True)
+    start = max(0, min(selected - rows // 2, len(themes) - rows))
+    if rows < len(themes) and box_w >= 30:
+        counter = f"{start + 1}-{start + rows}/{len(themes)}"
+        canvas.put(x + box_w - 2 - text_width(counter), y + 1,
+                   counter, theme.dim2)
+
+    name_x = x + 3
+    compact = box_w < 38
+    name_w = box_w - 5 if compact else 11
+    sw_x = name_x + name_w + 2
+    sw_w = 0 if compact else max(4, min(14, x + box_w - 8 - sw_x))
+    for i in range(start, start + rows):
+        preset = themes[i]
+        row_y = y + 2 + (i - start)
+        is_selected = i == selected
+        if is_selected:
+            canvas.put(x + 1, row_y, "▌", theme.accent, True)
+        canvas.put(name_x, row_y, fit_text(preset.label, name_w),
+                   preset.white if is_selected else preset.dim, is_selected)
+        if sw_w:
+            for k in range(sw_w):
+                level = k / max(1, sw_w - 1)
+                canvas.put(sw_x + k, row_y, "█", preset.eq_color(level))
+            sample_x = sw_x + sw_w + 2
+            if sample_x + 1 < x + box_w - 2:
+                canvas.put(sample_x, row_y, "A", preset.white, True)
+                canvas.put(sample_x + 1, row_y, "a", preset.accent)
+
+    footer_y = y + box_h - 2
+    if box_w >= 42:
+        segments = [
+            ("↑↓", theme.accent, True), (" preview   ", theme.dim, False),
+            ("Enter", theme.accent, True), (" apply   ", theme.dim, False),
+            ("Esc", theme.accent, True), (" cancel", theme.dim, False),
+        ]
+    else:
+        segments = [
+            ("↑↓", theme.accent, True), (" · ", theme.dim, False),
+            ("Enter", theme.accent, True), (" · ", theme.dim, False),
+            ("Esc", theme.accent, True),
+        ]
+    draw_segments(canvas, x + 2, footer_y, segments, box_w - 4)
 
 
 # -------------------------------------------------------------------- public
-def render(frame: Frame, width: int, height: int) -> list[str]:
+def render(frame: Frame, width: int, height: int,
+           theme: Theme | str | None = None,
+           menu: int | None = None) -> list[str]:
+    if isinstance(theme, str):
+        theme = get_theme(theme)
+    if theme is None:
+        theme = get_theme(DEFAULT_THEME)
+
     if width < 24 or height < 8:
         message = "terminal too small"
         canvas = Canvas(max(width, 1), max(height, 1))
-        canvas.put(0, 0, message[:width], DIM)
+        canvas.put(0, 0, message[:width], theme.dim)
         return canvas.to_lines()
 
     canvas = Canvas(width, height)
 
     if height < 14:
-        _draw_header(canvas, frame)
-        canvas.hline(1, 1, width - 1, "─", DIM2)
+        _draw_header(canvas, frame, theme)
+        canvas.hline(1, 1, width - 1, "─", theme.dim2)
         eq_bottom = height - 8
         if eq_bottom >= 2:
-            _draw_eq(canvas, frame, 2, eq_bottom)
-        _draw_timeline(canvas, frame, height - 6)
-        _draw_lyrics(canvas, frame, height - 5, height - 4, height - 3)
-        _draw_footer(canvas, frame)
-        return canvas.to_lines()
+            _draw_eq(canvas, frame, theme, 2, eq_bottom)
+        _draw_timeline(canvas, frame, theme, height - 6)
+        _draw_lyrics(canvas, frame, theme, height - 5, height - 4, height - 3)
+        _draw_footer(canvas, frame, theme)
+    else:
+        lyric_next = height - 3
+        lyric_cur = height - 4
+        lyric_prev = height - 5
+        timeline_y = height - 7
+        eq_bottom = timeline_y - 2
+        eq_height = min(24, height - 11)
+        eq_top = eq_bottom - eq_height + 1
 
-    lyric_next = height - 3
-    lyric_cur = height - 4
-    lyric_prev = height - 5
-    timeline_y = height - 7
-    eq_bottom = timeline_y - 2
-    eq_height = min(24, height - 11)
-    eq_top = eq_bottom - eq_height + 1
+        _draw_header(canvas, frame, theme)
+        canvas.hline(1, 1, width - 1, "─", theme.dim2)
+        _draw_eq(canvas, frame, theme, eq_top, eq_bottom)
+        _draw_timeline(canvas, frame, theme, timeline_y)
+        _draw_lyrics(canvas, frame, theme, lyric_prev, lyric_cur, lyric_next)
+        _draw_footer(canvas, frame, theme)
 
-    _draw_header(canvas, frame)
-    canvas.hline(1, 1, width - 1, "─", DIM2)
-    _draw_eq(canvas, frame, eq_top, eq_bottom)
-    _draw_timeline(canvas, frame, timeline_y)
-    _draw_lyrics(canvas, frame, lyric_prev, lyric_cur, lyric_next)
-    _draw_footer(canvas, frame)
+    if menu is not None:
+        canvas.dim(0.35)
+        _draw_theme_menu(canvas, theme, menu)
+
     return canvas.to_lines()

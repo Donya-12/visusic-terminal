@@ -4,6 +4,8 @@ __pycache__/
 *.egg-info/
 build/
 dist/
-docs/preview.html
+docs/*.html
 docs/preview2.png
+docs/theme_*.png
+docs/themes_contact.png
 .pytest_cache/

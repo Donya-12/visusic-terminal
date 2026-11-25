@@ -11,12 +11,13 @@ from .library import Track
 from .lrc import Lyrics, find_for_audio, load as load_lyrics
 from .player import AudioError, Player
 from .spectrum import Spectrum, bands_for_width
+from .theme import THEME_LIST, get_theme, load_theme_name, save_theme_name
 from .ui import Frame, fmt_time, render
 
 
 class App:
     def __init__(self, tracks: list[Track], fps: int = 30,
-                 volume: float = 0.75) -> None:
+                 volume: float = 0.75, theme: str | None = None) -> None:
         if not tracks:
             raise ValueError("playlist is empty")
         self.tracks = tracks
@@ -27,6 +28,9 @@ class App:
         self.duration = 0.0
         self.lyrics: Lyrics | None = None
         self.lyric_offset = 0.0
+        self.theme = get_theme(theme or load_theme_name())
+        self.menu_index: int | None = None
+        self._menu_original: str | None = None
 
         self._lyrics_cache: dict[Path, Lyrics | None] = {}
         self._spectrum = Spectrum(self.player.sr, bands_for_width(100))
@@ -98,14 +102,58 @@ class App:
         return ""
 
     # ----------------------------------------------------------------- input
+    def _open_theme_menu(self) -> None:
+        self._menu_original = self.theme.name
+        names = [theme.name for theme in THEME_LIST]
+        self.menu_index = names.index(self.theme.name) if self.theme.name in names else 0
+
+    def _preview_theme(self, index: int) -> None:
+        self.menu_index = index % len(THEME_LIST)
+        self.theme = THEME_LIST[self.menu_index]
+
+    def _close_theme_menu(self, apply: bool) -> None:
+        if apply:
+            saved = save_theme_name(self.theme.name)
+            suffix = "" if saved else " · config not saved"
+            self.toast(f"theme · {self.theme.label}{suffix}", 2.2)
+        else:
+            if self._menu_original:
+                self.theme = get_theme(self._menu_original)
+            self.toast(f"theme · {self.theme.label}", 1.2)
+        self.menu_index = None
+        self._menu_original = None
+
+    def _handle_theme_menu_key(self, key: str) -> None:
+        if key == "esc":
+            self._close_theme_menu(False)
+        elif key == "up":
+            self._preview_theme((self.menu_index or 0) - 1)
+        elif key == "down":
+            self._preview_theme((self.menu_index or 0) + 1)
+        elif key == "enter":
+            self._close_theme_menu(True)
+        elif key in ("q", "ctrl-c"):
+            self._running = False
+        elif len(key) == 1 and key.isdigit():
+            index = int(key) - 1
+            if 0 <= index < len(THEME_LIST):
+                self._preview_theme(index)
+                self._close_theme_menu(True)
+
     def _seek_by(self, delta: float, label: str) -> None:
         target = max(0.0, min(self.duration, self.player.position() + delta))
         self.player.seek(target)
         self.toast(f"{label} · {fmt_time(target)}")
 
     def handle_key(self, key: str) -> None:
+        if self.menu_index is not None:
+            self._handle_theme_menu_key(key)
+            return
+
         if key in ("q", "esc", "ctrl-c"):
             self._running = False
+        elif key in ("t", "c"):
+            self._open_theme_menu()
         elif key == "space":
             self.player.toggle()
         elif key == "left":
@@ -191,7 +239,8 @@ class App:
                     )
                     first = True
 
-                lines = render(self._make_frame(), width, height)
+                lines = render(self._make_frame(), width, height,
+                               self.theme, menu=self.menu_index)
                 prefix = "\x1b[2J\x1b[H" if first else "\x1b[H"
                 term.write(prefix + "\n".join(lines))
                 first = False

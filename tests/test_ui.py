@@ -6,6 +6,7 @@ import unittest
 import numpy as np
 
 from visusic.lrc import parse
+from visusic.theme import THEME_LIST, get_theme
 from visusic.ui import Frame, fit_text, render, text_width
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -98,6 +99,35 @@ class LayoutTests(unittest.TestCase):
         lines = render(frame_with(playing=False), 100, 26)
         self.assertEqual(len(lines), 26)
         self.assertIn("vol 80%", plain(lines[-1]))
+
+    def test_every_theme_renders(self) -> None:
+        for theme in THEME_LIST:
+            lines = render(frame_with(), 100, 26, theme=theme)
+            self.assertEqual(len(lines), 26, theme.name)
+            for line in lines:
+                self.assertEqual(text_width(plain(line)), 100)
+        self.assertEqual(len(render(frame_with(), 80, 24, theme="matrix")), 24)
+
+    def test_theme_menu(self) -> None:
+        lines = render(frame_with(), 100, 30, get_theme("synthwave"), menu=1)
+        text = plain("\n".join(lines))
+        self.assertIn("COLOR THEME", text)
+        self.assertIn("Aurora", text)
+        self.assertIn("Synthwave", text)
+        self.assertIn("Enter", text)
+        self.assertIn("Esc", text)
+        self.assertEqual(len(lines), 30)
+        for line in lines:
+            self.assertEqual(text_width(plain(line)), 100)
+
+    def test_theme_menu_scrolls_in_small_terminal(self) -> None:
+        for width, height in ((60, 12), (40, 10), (28, 8)):
+            lines = render(frame_with(), width, height,
+                           get_theme("amber"), menu=5)
+            self.assertEqual(len(lines), height)
+            for line in lines:
+                self.assertEqual(text_width(plain(line)), width)
+            self.assertIn("Mono", plain("\n".join(lines)))
 
 
 class TextTests(unittest.TestCase):

@@ -1,10 +1,11 @@
 ﻿"""Development helper: render one frame to an HTML preview.
 
-Usage: python tools/preview.py [width] [height]
+Usage: python tools/preview.py [width] [height] [--theme NAME] [--menu N] [--out PATH]
 """
 
 from __future__ import annotations
 
+import argparse
 import html
 import re
 import sys
@@ -16,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from visusic.lrc import parse  # noqa: E402
 from visusic.spectrum import bands_for_width  # noqa: E402
+from visusic.theme import get_theme, theme_names  # noqa: E402
 from visusic.ui import Frame, render  # noqa: E402
 
 ANSI = re.compile(r"\x1b\[([0-9;]*)m")
@@ -105,17 +107,29 @@ def sample_frame(bands: int = 38) -> Frame:
 
 
 def main() -> None:
-    width = int(sys.argv[1]) if len(sys.argv) > 1 else 119
-    height = int(sys.argv[2]) if len(sys.argv) > 2 else 30
+    parser = argparse.ArgumentParser(description="Render one VisuSic frame to HTML")
+    parser.add_argument("width", nargs="?", type=int, default=119)
+    parser.add_argument("height", nargs="?", type=int, default=30)
+    parser.add_argument("--theme", choices=theme_names(), default="aurora")
+    parser.add_argument("--menu", type=int, default=None,
+                        help="show the theme menu with this preset selected")
+    parser.add_argument("--out", default="docs/preview.html")
+    parser.add_argument("--title", default="VisuSic Terminal — preview")
+    args = parser.parse_args()
+
+    width, height = args.width, args.height
     frame = sample_frame(bands_for_width(width))
-    lines = render(frame, width, height)
+    theme = get_theme(args.theme)
+    lines = render(frame, width, height, theme, menu=args.menu)
     body = ansi_to_html(lines)
+    if args.menu is not None:
+        args.title = f"{args.title} · themes"
 
     page = f"""<!doctype html>
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<title>VisuSic Terminal — preview</title>
+<title>{html.escape(args.title)}</title>
 <style>
   html, body {{ margin: 0; background: #05070b; }}
   body {{ padding: 28px; font-family: "Cascadia Mono", Consolas, monospace; }}
@@ -150,7 +164,9 @@ def main() -> None:
 </body>
 </html>
 """
-    target = Path(__file__).resolve().parents[1] / "docs" / "preview.html"
+    target = Path(args.out)
+    if not target.is_absolute():
+        target = Path(__file__).resolve().parents[1] / target
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(page, encoding="utf-8")
     print(f"wrote {target}")
