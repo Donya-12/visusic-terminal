@@ -7,6 +7,9 @@ lyrics track the audio instead of a wall clock.
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
 import threading
 from pathlib import Path
 
@@ -30,6 +33,50 @@ def _to_stereo(data: np.ndarray) -> np.ndarray:
     if channels > 2:
         return data[:, :2].copy()
     return data
+
+
+def ffmpeg_exe() -> str | None:
+    """Path to a usable FFmpeg binary (bundled or on PATH)."""
+    override = os.environ.get("VISUSIC_FFMPEG")
+    if override and Path(override).is_file():
+        return override
+    try:
+        import imageio_ffmpeg
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return shutil.which("ffmpeg")
+
+
+def decode_with_ffmpeg(path: Path, samplerate: int) -> np.ndarray:
+    """Decode any FFmpeg-supported file to float32 stereo at samplerate."""
+    executable = ffmpeg_exe()
+    if not executable:
+        raise AudioError(
+            "FFmpeg is not available; install imageio-ffmpeg or put ffmpeg.exe on PATH"
+        )
+    command = [
+        executable, "-v", "error", "-i", str(path), "-vn", "-map", "a:0",
+        "-f", "f32le", "-acodec", "pcm_f32le", "-ac", "2",
+        "-ar", str(samplerate), "-",
+    ]
+    try:
+        process = subprocess.run(
+            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False
+        )
+    except OSError as exc:
+        raise AudioError(f"Could not start FFmpeg: {exc}") from exc
+    if process.returncode != 0:
+        detail = process.stderr.decode("utf-8", "replace").strip().splitlines()
+        message = detail[-1] if detail else f"exit code {process.returncode}"
+        raise AudioError(f"FFmpeg could not decode {path.name}: {message}")
+    raw = process.stdout
+    if not raw:
+        raise AudioError(f"{path.name} contains no audio")
+    data = np.frombuffer(raw, dtype="<f4")
+    if data.size % 2:
+        data = data[:-1]
+    return data.reshape(-1, 2)
 
 
 def resample_linear(data: np.ndarray, source_rate: int, target_rate: int) -> np.ndarray:
@@ -152,10 +199,17 @@ class Player:
             self._playing = False
 
         path = Path(track.path)
+        rate = self.sr
         try:
             data, rate = sf.read(path, dtype="float32", always_2d=True)
-        except Exception as exc:
-            raise AudioError(f"Could not decode {path.name}: {exc}") from exc
+        except Exception as soundfile_error:
+            try:
+                data = decode_with_ffmpeg(path, self.sr)
+            except AudioError as ffmpeg_error:
+                raise AudioError(
+                    f"Could not decode {path.name}: {soundfile_error}; "
+                    f"{ffmpeg_error}"
+                ) from ffmpeg_error
 
         if data.size == 0:
             raise AudioError(f"{path.name} contains no audio")

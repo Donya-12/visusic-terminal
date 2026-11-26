@@ -43,13 +43,14 @@ _FULL_HINT = (
     ("n/p", " track  "),
     ("[ ]", " sync  "),
     ("t", " theme  "),
+    ("l", " list  "),
     ("q", " quit"),
 )
 _SHORT_HINT = (
     ("spc", " play  "),
     ("←→", " seek  "),
     ("n/p", " next  "),
-    ("t", " theme  "),
+    ("l/t", " menu  "),
     ("q", " quit"),
 )
 
@@ -70,6 +71,25 @@ class Frame:
     lyric_time: float = 0.0
     lyric_offset: float = 0.0
     status: str = ""
+
+
+@dataclass
+class PlaylistRow:
+    index: int
+    title: str
+    artist: str = ""
+    album: str = ""
+    duration: float | None = None
+    cover: list[list[Color]] | None = None
+    current: bool = False
+    loaded: bool = False
+
+
+@dataclass
+class PlaylistView:
+    rows: list[PlaylistRow]
+    selected: int
+    current: int
 
 
 # --------------------------------------------------------------------- canvas
@@ -116,7 +136,7 @@ def fmt_time(seconds: float) -> str:
 
 
 class Canvas:
-    __slots__ = ("w", "h", "chars", "colors", "bold")
+    __slots__ = ("w", "h", "chars", "colors", "bgs", "bold")
 
     def __init__(self, width: int, height: int) -> None:
         self.w = width
@@ -125,10 +145,14 @@ class Canvas:
         self.colors: list[list[Color | None]] = [
             [None] * width for _ in range(height)
         ]
+        self.bgs: list[list[Color | None]] = [
+            [None] * width for _ in range(height)
+        ]
         self.bold = [[False] * width for _ in range(height)]
 
     def put(self, x: int, y: int, text: str,
-            color: Color | None = None, bold: bool = False) -> int:
+            color: Color | None = None, bold: bool = False,
+            bg: Color | None = None) -> int:
         if 0 <= y < self.h:
             for ch in text:
                 width = char_width(ch)
@@ -139,19 +163,23 @@ class Canvas:
                 if 0 <= x < self.w:
                     self.chars[y][x] = ch
                     self.colors[y][x] = color
+                    self.bgs[y][x] = bg
                     self.bold[y][x] = bold
                     if width == 2 and x + 1 < self.w:
                         self.chars[y][x + 1] = ""
                         self.colors[y][x + 1] = color
+                        self.bgs[y][x + 1] = bg
                 x += width
         return x
 
     def rect(self, x0: int, y0: int, x1: int, y1: int, ch: str = " ",
-             color: Color | None = None, bold: bool = False) -> None:
+             color: Color | None = None, bold: bool = False,
+             bg: Color | None = None) -> None:
         for y in range(max(0, y0), min(self.h, y1)):
             for x in range(max(0, x0), min(self.w, x1)):
                 self.chars[y][x] = ch
                 self.colors[y][x] = color
+                self.bgs[y][x] = bg
                 self.bold[y][x] = bold
 
     def dim(self, factor: float = 0.4) -> None:
@@ -164,6 +192,13 @@ class Canvas:
                         int(color[1] * factor),
                         int(color[2] * factor),
                     )
+                bg = self.bgs[y][x]
+                if bg is not None:
+                    self.bgs[y][x] = (
+                        int(bg[0] * factor),
+                        int(bg[1] * factor),
+                        int(bg[2] * factor),
+                    )
 
     def hline(self, y: int, x0: int, x1: int, ch: str,
               color: Color | None = None) -> None:
@@ -172,24 +207,27 @@ class Canvas:
         for x in range(max(0, x0), min(self.w, x1)):
             self.chars[y][x] = ch
             self.colors[y][x] = color
+            self.bgs[y][x] = None
 
     def to_lines(self) -> list[str]:
         lines: list[str] = []
         for y in range(self.h):
             parts: list[str] = []
-            current: tuple[Color | None, bool] | None = None
+            current: tuple[Color | None, Color | None, bool] | None = None
             for x in range(self.w):
                 ch = self.chars[y][x]
                 if ch == "":
                     continue
-                style = (self.colors[y][x], self.bold[y][x])
+                style = (self.colors[y][x], self.bgs[y][x], self.bold[y][x])
                 if style != current:
-                    color, bold = style
+                    color, bg, bold = style
                     code = "\x1b[0m"
                     if bold:
                         code += "\x1b[1m"
                     if color is not None:
                         code += f"\x1b[38;2;{color[0]};{color[1]};{color[2]}m"
+                    if bg is not None:
+                        code += f"\x1b[48;2;{bg[0]};{bg[1]};{bg[2]}m"
                     parts.append(code)
                     current = style
                 parts.append(ch)
@@ -519,10 +557,108 @@ def _draw_theme_menu(canvas: Canvas, theme: Theme, selected: int) -> None:
     draw_segments(canvas, x + 2, footer_y, segments, box_w - 4)
 
 
+def _draw_playlist(canvas: Canvas, theme: Theme, view: PlaylistView) -> None:
+    rows = view.rows
+    if not rows:
+        return
+    total = len(rows)
+    selected = max(0, min(total - 1, int(view.selected)))
+    box_w = min(80, max(24, canvas.w - 4))
+    items = min(6, max(1, (canvas.h - 8) // 4), total)
+    box_h = items * 4 + 4
+    x = max(0, (canvas.w - box_w) // 2)
+    y = max(0, (canvas.h - box_h) // 2)
+
+    canvas.rect(x, y, x + box_w, y + box_h)
+    canvas.put(x, y, "┌" + "─" * (box_w - 2) + "┐", theme.accent_dim)
+    for row in range(y + 1, y + box_h - 1):
+        canvas.put(x, row, "│", theme.accent_dim)
+        canvas.put(x + box_w - 1, row, "│", theme.accent_dim)
+    canvas.put(x, y + box_h - 1, "└" + "─" * (box_w - 2) + "┘",
+               theme.accent_dim)
+
+    canvas.put(x + 2, y + 1, "PLAYLIST", theme.accent, True)
+    counter = f"{total} track" if total == 1 else f"{total} tracks"
+    if text_width(counter) + 16 < box_w:
+        canvas.put(x + box_w - 3 - text_width(counter), y + 1,
+                   counter, theme.dim2)
+
+    start = max(0, min(selected - items // 2, total - items))
+    compact = box_w < 60
+    text_x = x + 5 if compact else x + 12
+    for slot in range(items):
+        row_index = start + slot
+        item = rows[row_index]
+        item_y = y + 2 + slot * 4
+        is_selected = row_index == selected
+        is_current = item.current or item.index == view.current
+
+        if is_selected:
+            for dy in range(3):
+                canvas.put(x + 1, item_y + dy, "▌", theme.accent)
+
+        if not compact:
+            cover_x = x + 2
+            if item.cover:
+                for cy in range(3):
+                    for cx in range(8):
+                        color = item.cover[cy][cx]
+                        canvas.put(cover_x + cx, item_y + cy, " ",
+                                   bg=color)
+            else:
+                for cy in range(3):
+                    for cx in range(8):
+                        level = 0.15 + 0.75 * (
+                            (item.index * 3 + cx + cy * 2) % 9
+                        ) / 8.0
+                        color = theme.eq_color(level)
+                        canvas.put(cover_x + cx, item_y + cy, " ",
+                                   bg=mix(theme.dim2, color, 0.75))
+
+        marker = "▶" if is_current else " "
+        canvas.put(text_x - 2, item_y, marker,
+                   theme.accent if is_current else theme.dim)
+        title_color = (theme.accent if is_current
+                       else theme.white if is_selected else theme.text)
+        duration = fmt_time(item.duration) if item.duration else ""
+        duration_x = x + box_w - 3 - text_width(duration)
+        title_width = max(4, duration_x - text_x - 2)
+        canvas.put(text_x, item_y, fit_text(item.title, title_width),
+                   title_color, is_current or is_selected)
+        if duration:
+            canvas.put(duration_x, item_y, duration, theme.dim2)
+
+        artist = item.artist or "unknown artist"
+        if item.album:
+            artist = f"{artist} · {item.album}"
+        meta_width = max(4, x + box_w - 3 - text_x)
+        canvas.put(text_x, item_y + 1, fit_text(artist, meta_width),
+                   theme.dim)
+        meta = f"{item.index + 1:02d} / {total}"
+        canvas.put(text_x, item_y + 2, fit_text(meta, meta_width),
+                   theme.dim2)
+
+    footer_y = y + box_h - 2
+    if box_w >= 52:
+        segments = [
+            ("↑↓", theme.accent, True), (" select   ", theme.dim, False),
+            ("Enter", theme.accent, True), (" play   ", theme.dim, False),
+            ("Esc", theme.accent, True), (" close", theme.dim, False),
+        ]
+    else:
+        segments = [
+            ("↑↓", theme.accent, True), (" · ", theme.dim, False),
+            ("Enter", theme.accent, True), (" · ", theme.dim, False),
+            ("Esc", theme.accent, True),
+        ]
+    draw_segments(canvas, x + 2, footer_y, segments, box_w - 4)
+
+
 # -------------------------------------------------------------------- public
 def render(frame: Frame, width: int, height: int,
            theme: Theme | str | None = None,
-           menu: int | None = None) -> list[str]:
+           menu: int | None = None,
+           playlist: PlaylistView | None = None) -> list[str]:
     if isinstance(theme, str):
         theme = get_theme(theme)
     if theme is None:
@@ -564,5 +700,8 @@ def render(frame: Frame, width: int, height: int,
     if menu is not None:
         canvas.dim(0.35)
         _draw_theme_menu(canvas, theme, menu)
+    elif playlist is not None:
+        canvas.dim(0.35)
+        _draw_playlist(canvas, theme, playlist)
 
     return canvas.to_lines()

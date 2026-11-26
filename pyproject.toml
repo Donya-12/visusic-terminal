@@ -4,13 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "visusic-terminal"
-version = "0.2.0"
-description = "Tiny terminal music visualizer with karaoke lyrics, timeline and spectrum"
+version = "0.3.0"
+description = "Tiny terminal music visualizer with karaoke, playlist, covers, Windows media controls and spectrum"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 authors = [{ name = "Donya-12" }]
-keywords = ["music", "visualizer", "terminal", "karaoke", "lrc", "spectrum"]
+keywords = ["music", "visualizer", "terminal", "karaoke", "lrc", "spectrum",
+            "playlist", "album-art", "windows-media"]
 classifiers = [
     "Environment :: Console",
     "Operating System :: Microsoft :: Windows",
@@ -21,6 +22,16 @@ dependencies = [
     "numpy>=1.24",
     "soundfile>=0.13",
     "sounddevice>=0.5",
+    "mutagen>=1.47",
+    "pillow>=10",
+    "imageio-ffmpeg>=0.5",
+    "winrt-runtime>=4.0",
+    "winrt-Windows.Foundation>=4.0",
+    "winrt-Windows.Media>=4.0",
+    "winrt-Windows.Media.Core>=4.0",
+    "winrt-Windows.Media.Playback>=4.0",
+    "winrt-Windows.Storage>=4.0",
+    "winrt-Windows.Storage.Streams>=4.0",
 ]
 
 [project.optional-dependencies]
@@ -33,6 +44,7 @@ Releases = "https://github.com/Donya-12/visusic-terminal/releases"
 [project.scripts]
 visusic = "visusic.cli:main"
 visusic-fetch = "visusic.fetch:main"
+visusic-covers = "visusic.covers:main"
 
 [tool.setuptools]
 packages = ["visusic"]

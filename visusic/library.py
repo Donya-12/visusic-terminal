@@ -6,7 +6,10 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-AUDIO_EXTENSIONS = {".mp3", ".flac", ".wav", ".ogg", ".opus", ".aiff", ".aif"}
+AUDIO_EXTENSIONS = {
+    ".mp3", ".flac", ".wav", ".ogg", ".oga", ".opus", ".aiff", ".aif",
+    ".m4a", ".m4b", ".aac", ".wma", ".alac", ".ape", ".wv", ".mka",
+}
 _SKIP_DIRS = {".git", ".venv", "venv", "__pycache__", "$RECYCLE.BIN",
               "System Volume Information"}
 _TRACK_NUMBER = re.compile(r"^\s*\d{1,2}\s*[.\-_)]\s+")
@@ -17,6 +20,8 @@ class Track:
     path: Path
     artist: str
     title: str
+    album: str = ""
+    duration: float | None = None
 
     @property
     def display(self) -> str:

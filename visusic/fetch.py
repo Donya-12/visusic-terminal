@@ -18,6 +18,7 @@ from pathlib import Path
 
 import soundfile as sf
 
+from . import metadata
 from . import __version__
 from .library import Track, scan
 
@@ -39,6 +40,12 @@ def _similar(left: str, right: str) -> bool:
 
 
 def _duration(path: Path) -> float | None:
+    try:
+        info = metadata.read_info(path)
+        if info.duration:
+            return info.duration
+    except Exception:
+        pass
     try:
         return float(sf.info(path).duration)
     except Exception:

@@ -11,6 +11,8 @@ _ARROWS = {
     "M": "right",
     "G": "home",
     "O": "end",
+    "I": "pageup",
+    "Q": "pagedown",
 }
 
 
@@ -38,6 +40,8 @@ class KeyReader:
                 keys.append("esc")
             elif char in ("\r", "\n"):
                 keys.append("enter")
+            elif char == "\t":
+                keys.append("tab")
             elif char == " ":
                 keys.append("space")
             elif char.isprintable():

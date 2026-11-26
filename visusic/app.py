@@ -1,18 +1,20 @@
-"""Application loop: input, playback state and rendering."""
+﻿"""Application loop: input, playback state and rendering."""
 
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 from pathlib import Path
 
-from . import term
+from . import metadata, term
 from .keys import KeyReader
 from .library import Track
 from .lrc import Lyrics, find_for_audio, load as load_lyrics
 from .player import AudioError, Player
+from .smtc import MediaSession
 from .spectrum import Spectrum, bands_for_width
 from .theme import THEME_LIST, get_theme, load_theme_name, save_theme_name
-from .ui import Frame, fmt_time, render
+from .ui import (Frame, PlaylistRow, PlaylistView, fmt_time, render)
 
 
 class App:
@@ -32,6 +34,22 @@ class App:
         self.menu_index: int | None = None
         self._menu_original: str | None = None
 
+        self.playlist_index: int | None = None
+        self.playlist_rows: list[PlaylistRow] = []
+        self._current_cover: bytes | None = None
+
+        self.smtc: MediaSession | None = None
+        self._smtc_error = ""
+        self._smtc_warned = False
+
+        self._lyrics_cache: dict[Path, Lyrics | None] = {}
+        self._spectrum = Spectrum(self.player.sr, bands_for_width(100))
+        self._running = True
+        self._status = ""
+        self._status_until = 0.0
+        self._size = (0, 0)
+        self._dt = 1.0 / self.fps
+
         self._lyrics_cache: dict[Path, Lyrics | None] = {}
         self._spectrum = Spectrum(self.player.sr, bands_for_width(100))
         self._running = True
@@ -43,11 +61,21 @@ class App:
     # ------------------------------------------------------------- playback
     def load(self, index: int, autoplay: bool = True) -> None:
         index %= len(self.tracks)
-        track = self.tracks[index]
-        self.player.load(track, autoplay=autoplay)
+        base = self.tracks[index]
+        self.player.load(base, autoplay=autoplay)
+
+        info = metadata.read_info(base.path, base.artist, base.title)
+        track = replace(
+            base,
+            artist=info.artist or base.artist,
+            title=info.title or base.title,
+            album=info.album,
+            duration=info.duration,
+        )
+        self._current_cover = metadata.cover_bytes(base.path)
 
         lyrics = None
-        lrc_path = find_for_audio(track.path)
+        lrc_path = find_for_audio(base.path)
         if lrc_path is not None:
             if lrc_path in self._lyrics_cache:
                 lyrics = self._lyrics_cache[lrc_path]
@@ -65,6 +93,15 @@ class App:
         self.lyric_offset = 0.0
         self._spectrum.clear()
         term.set_title(f"VisuSic Terminal · {track.display}")
+
+        if self.playlist_rows:
+            for row in self.playlist_rows:
+                row.current = row.index == index
+            center = (self.playlist_index if self.playlist_index is not None
+                      else index)
+            self._load_playlist_metadata(center)
+        if self.smtc is not None:
+            self._sync_media(force=True)
 
     def _load_any(self, index: int, autoplay: bool = True) -> bool:
         last_error = ""
@@ -100,6 +137,133 @@ class App:
         if self._status and time.monotonic() < self._status_until:
             return self._status
         return ""
+
+    # ------------------------------------------------------- windows media
+    def _start_media_session(self) -> None:
+        try:
+            self.smtc = MediaSession()
+        except Exception as exc:
+            self.smtc = None
+            self._smtc_error = str(exc)
+            return
+        self._sync_media(force=True)
+
+    def _sync_media(self, force: bool = False) -> None:
+        if self.smtc is None:
+            return
+        try:
+            self.smtc.update(
+                title=self.track.title,
+                artist=self.track.artist,
+                album=self.track.album,
+                position=self.player.position(),
+                duration=self.duration,
+                playing=self.player.playing,
+                cover=self._current_cover,
+                force=force,
+            )
+        except Exception as exc:
+            self._smtc_error = str(exc)
+            try:
+                self.smtc.close()
+            except Exception:
+                pass
+            self.smtc = None
+            if not self._smtc_warned:
+                self._smtc_warned = True
+                self.toast("Windows media controls unavailable", 4.0)
+
+    def _handle_media_command(self, command: str) -> None:
+        if command == "play":
+            self.player.play()
+        elif command == "pause":
+            self.player.pause()
+        elif command == "next":
+            self.next_track()
+        elif command == "previous":
+            self.previous_track()
+        elif command == "stop":
+            self.player.pause()
+            self.player.seek(0.0)
+            self.toast("stopped")
+        elif command.startswith("seek:"):
+            try:
+                target = float(command.split(":", 1)[1])
+            except ValueError:
+                return
+            self.player.seek(target)
+            self.toast(f"seek · {fmt_time(target)}")
+        self._sync_media(force=True)
+
+    # ------------------------------------------------------------- playlist
+    def _ensure_playlist(self) -> None:
+        if len(self.playlist_rows) != len(self.tracks):
+            self.playlist_rows = [
+                PlaylistRow(index=i, title=track.title, artist=track.artist)
+                for i, track in enumerate(self.tracks)
+            ]
+            for row in self.playlist_rows:
+                row.current = row.index == self.index
+
+    def _load_playlist_metadata(self, center: int) -> None:
+        if not self.playlist_rows:
+            return
+        center = max(0, min(len(self.playlist_rows) - 1, center))
+        start = max(0, center - 6)
+        stop = min(len(self.playlist_rows), center + 7)
+        for i in range(start, stop):
+            row = self.playlist_rows[i]
+            if row.loaded:
+                continue
+            base = self.tracks[i]
+            info = metadata.read_info(base.path, base.artist, base.title)
+            row.title = info.title or base.title
+            row.artist = info.artist or base.artist
+            row.album = info.album
+            row.duration = info.duration
+            row.cover = metadata.cover_mosaic(base.path, 8, 3)
+            row.loaded = True
+
+    def _open_playlist(self) -> None:
+        self._ensure_playlist()
+        self.playlist_index = self.index
+        for row in self.playlist_rows:
+            row.current = row.index == self.index
+        self._load_playlist_metadata(self.index)
+
+    def _close_playlist(self) -> None:
+        self.playlist_index = None
+
+    def _move_playlist(self, delta: int) -> None:
+        if self.playlist_index is None or not self.playlist_rows:
+            return
+        index = max(0, min(len(self.playlist_rows) - 1,
+                           self.playlist_index + delta))
+        self.playlist_index = index
+        self._load_playlist_metadata(index)
+
+    def _handle_playlist_key(self, key: str) -> None:
+        if key in ("esc", "l", "tab"):
+            self._close_playlist()
+        elif key in ("q", "ctrl-c"):
+            self._running = False
+        elif key == "up":
+            self._move_playlist(-1)
+        elif key == "down":
+            self._move_playlist(1)
+        elif key == "pageup":
+            self._move_playlist(-6)
+        elif key == "pagedown":
+            self._move_playlist(6)
+        elif key == "home":
+            self._move_playlist(-len(self.playlist_rows))
+        elif key == "end":
+            self._move_playlist(len(self.playlist_rows))
+        elif key == "enter" and self.playlist_index is not None:
+            index = self.playlist_index
+            self._close_playlist()
+            self._load_any(index, autoplay=True)
+            self.toast(f"track · {self.track.display}", 2.0)
 
     # ----------------------------------------------------------------- input
     def _open_theme_menu(self) -> None:
@@ -149,11 +313,16 @@ class App:
         if self.menu_index is not None:
             self._handle_theme_menu_key(key)
             return
+        if self.playlist_index is not None:
+            self._handle_playlist_key(key)
+            return
 
         if key in ("q", "esc", "ctrl-c"):
             self._running = False
         elif key in ("t", "c"):
             self._open_theme_menu()
+        elif key in ("l", "tab"):
+            self._open_playlist()
         elif key == "space":
             self.player.toggle()
         elif key == "left":
@@ -213,8 +382,11 @@ class App:
         if not self._load_any(0):
             raise AudioError(self._current_status() or "nothing to play")
 
+        self._start_media_session()
         reader = key_source or KeyReader().read
         term.setup()
+        if self._smtc_error:
+            self.toast("Windows media controls unavailable", 4.0)
         first = True
         last_time = time.perf_counter()
         frames = 0
@@ -224,12 +396,17 @@ class App:
                 self._dt = max(0.001, min(0.25, now - last_time))
                 last_time = now
 
+                if self.smtc is not None:
+                    for command in self.smtc.poll():
+                        self._handle_media_command(command)
+
                 for key in reader():
                     self.handle_key(key)
                 if not self._running:
                     break
 
                 self._advance_if_finished()
+                self._sync_media()
 
                 width, height = term.size()
                 if (width, height) != self._size:
@@ -239,8 +416,17 @@ class App:
                     )
                     first = True
 
+                playlist = None
+                if self.playlist_index is not None:
+                    self._ensure_playlist()
+                    playlist = PlaylistView(
+                        rows=self.playlist_rows,
+                        selected=self.playlist_index,
+                        current=self.index,
+                    )
                 lines = render(self._make_frame(), width, height,
-                               self.theme, menu=self.menu_index)
+                               self.theme, menu=self.menu_index,
+                               playlist=playlist)
                 prefix = "\x1b[2J\x1b[H" if first else "\x1b[H"
                 term.write(prefix + "\n".join(lines))
                 first = False
@@ -254,5 +440,9 @@ class App:
                 if delay > 0:
                     time.sleep(delay)
         finally:
+            if self.smtc is not None:
+                self.smtc.close()
+                self.smtc = None
             self.player.close()
             term.teardown()
+

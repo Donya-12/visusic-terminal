@@ -21,11 +21,15 @@ BUILD = ROOT / "build"
 TARGETS = {
     "visusic": {
         "module": "visusic.cli",
-        "collect": ("sounddevice", "soundfile"),
+        "collect": ("sounddevice", "soundfile", "imageio_ffmpeg"),
     },
     "visusic-fetch": {
         "module": "visusic.fetch",
         "collect": ("soundfile",),
+    },
+    "visusic-covers": {
+        "module": "visusic.covers",
+        "collect": (),
     },
 }
 

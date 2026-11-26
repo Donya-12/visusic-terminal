@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from visusic.lrc import parse  # noqa: E402
 from visusic.spectrum import bands_for_width  # noqa: E402
 from visusic.theme import get_theme, theme_names  # noqa: E402
-from visusic.ui import Frame, render  # noqa: E402
+from visusic.ui import Frame, PlaylistRow, PlaylistView, render  # noqa: E402
 
 ANSI = re.compile(r"\x1b\[([0-9;]*)m")
 SAMPLE_LRC = """[ar:Неоновые волны]
@@ -40,6 +40,7 @@ def ansi_to_html(lines: list[str]) -> str:
     for line in lines:
         parts: list[str] = []
         color: str | None = None
+        background: str | None = None
         bold = False
         position = 0
         for match in ANSI.finditer(line):
@@ -48,22 +49,28 @@ def ansi_to_html(lines: list[str]) -> str:
                 style = ""
                 if color:
                     style += f"color:{color};"
+                if background:
+                    style += f"background-color:{background};"
                 if bold:
                     style += "font-weight:700;"
                 parts.append(f"<span style=\"{style}\">{html.escape(chunk)}</span>")
             codes = match.group(1).split(";")
             if match.group(1) in ("", "0"):
-                color, bold = None, False
+                color, background, bold = None, None, False
             else:
                 i = 0
                 while i < len(codes):
                     code = codes[i]
                     if code == "1":
                         bold = True
-                    elif code == "38" and i + 4 < len(codes) and codes[i + 1] == "2":
-                        color = "#{:02x}{:02x}{:02x}".format(
+                    elif code in ("38", "48") and i + 4 < len(codes) and codes[i + 1] == "2":
+                        value = "#{:02x}{:02x}{:02x}".format(
                             int(codes[i + 2]), int(codes[i + 3]), int(codes[i + 4])
                         )
+                        if code == "38":
+                            color = value
+                        else:
+                            background = value
                         i += 4
                     i += 1
             position = match.end()
@@ -106,6 +113,33 @@ def sample_frame(bands: int = 38) -> Frame:
     )
 
 
+def sample_playlist(theme, selected: int = 2) -> PlaylistView:
+    items = [
+        ("Neon Waves", "Midnight Drive", "Terminal Sessions", 241.0),
+        ("The Same Stars", "City Lights", "Night Drive", 208.0),
+        ("8-Bit Bunker", "My Time", "Arcade Heart", 201.0),
+        ("Adventure Time", "Island Song", "Come Along with Me", 109.0),
+        ("ABBA", "The Winner Takes It All", "The Essential Collection", 295.0),
+        ("Chrome Hearts", "Static Bloom", "Afterglow", 187.0),
+        ("Mono Lake", "Slow Motion", "Blue Hour", 264.0),
+        ("Synth Coast", "Last Train", "Neon Tapes", 223.0),
+    ]
+    rows = []
+    for index, (artist, title, album, duration) in enumerate(items):
+        cover = []
+        for y in range(3):
+            cover.append([
+                theme.eq_color(0.15 + 0.7 * ((index * 3 + x + y * 2) % 9) / 8)
+                for x in range(8)
+            ])
+        rows.append(PlaylistRow(
+            index=index, title=title, artist=artist, album=album,
+            duration=duration, cover=cover, current=index == 0,
+            loaded=True,
+        ))
+    return PlaylistView(rows=rows, selected=selected, current=0)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Render one VisuSic frame to HTML")
     parser.add_argument("width", nargs="?", type=int, default=119)
@@ -113,6 +147,8 @@ def main() -> None:
     parser.add_argument("--theme", choices=theme_names(), default="aurora")
     parser.add_argument("--menu", type=int, default=None,
                         help="show the theme menu with this preset selected")
+    parser.add_argument("--playlist", action="store_true",
+                        help="show the playlist overlay")
     parser.add_argument("--out", default="docs/preview.html")
     parser.add_argument("--title", default="VisuSic Terminal — preview")
     args = parser.parse_args()
@@ -120,10 +156,14 @@ def main() -> None:
     width, height = args.width, args.height
     frame = sample_frame(bands_for_width(width))
     theme = get_theme(args.theme)
-    lines = render(frame, width, height, theme, menu=args.menu)
+    playlist = sample_playlist(theme) if args.playlist else None
+    lines = render(frame, width, height, theme, menu=args.menu,
+                   playlist=playlist)
     body = ansi_to_html(lines)
     if args.menu is not None:
         args.title = f"{args.title} · themes"
+    if args.playlist:
+        args.title = f"{args.title} · playlist"
 
     page = f"""<!doctype html>
 <html lang="ru">
@@ -174,4 +214,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 

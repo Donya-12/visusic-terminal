@@ -7,7 +7,8 @@ import numpy as np
 
 from visusic.lrc import parse
 from visusic.theme import THEME_LIST, get_theme
-from visusic.ui import Frame, fit_text, render, text_width
+from visusic.ui import (Frame, PlaylistRow, PlaylistView, fit_text, render,
+                        text_width)
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -128,6 +129,42 @@ class LayoutTests(unittest.TestCase):
             for line in lines:
                 self.assertEqual(text_width(plain(line)), width)
             self.assertIn("Mono", plain("\n".join(lines)))
+
+    def test_playlist_renders_covers_and_rows(self) -> None:
+        theme = get_theme("aurora")
+        rows = []
+        for i, (artist, title) in enumerate((
+            ("Neon Waves", "Midnight Drive"),
+            ("The Same Stars", "City Lights"),
+            ("8-Bit Bunker", "My Time"),
+            ("ABBA", "The Winner Takes It All"),
+        )):
+            cover = [[theme.eq_color((i + x + y) / 12) for x in range(8)]
+                     for y in range(3)]
+            rows.append(PlaylistRow(index=i, title=title, artist=artist,
+                                    album="Test Album", duration=200.0 + i,
+                                    cover=cover, current=i == 0, loaded=True))
+        view = PlaylistView(rows=rows, selected=1, current=0)
+        lines = render(frame_with(), 100, 30, theme, playlist=view)
+        raw = "\n".join(lines)
+        text = plain(raw)
+        self.assertIn("PLAYLIST", text)
+        self.assertIn("City Lights", text)
+        self.assertIn("Enter", text)
+        self.assertIn("\x1b[48;2;", raw)
+        for line in lines:
+            self.assertEqual(text_width(plain(line)), 100)
+
+    def test_playlist_in_small_terminal(self) -> None:
+        rows = [PlaylistRow(index=i, title=f"Track {i + 1}", artist="Artist")
+                for i in range(20)]
+        view = PlaylistView(rows=rows, selected=17, current=3)
+        for width, height in ((40, 12), (28, 8)):
+            lines = render(frame_with(), width, height,
+                           get_theme("matrix"), playlist=view)
+            self.assertEqual(len(lines), height)
+            for line in lines:
+                self.assertEqual(text_width(plain(line)), width)
 
 
 class TextTests(unittest.TestCase):

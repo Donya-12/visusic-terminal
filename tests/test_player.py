@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 
 import numpy as np
+import soundfile as sf
 
-from visusic.player import _to_stereo, resample_linear
+from visusic.player import _to_stereo, decode_with_ffmpeg, ffmpeg_exe, resample_linear
 
 
 class StereoTests(unittest.TestCase):
@@ -34,6 +38,30 @@ class ResampleTests(unittest.TestCase):
         data = np.full((4800, 2), 0.25, dtype=np.float32)
         result = resample_linear(data, 44100, 48000)
         self.assertTrue(np.allclose(result, 0.25, atol=1e-6))
+
+
+class FFmpegTests(unittest.TestCase):
+    def test_fallback_decodes_m4a(self) -> None:
+        executable = ffmpeg_exe()
+        if not executable:
+            self.skipTest("FFmpeg is not available")
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            wav = folder / "tone.wav"
+            m4a = folder / "tone.m4a"
+            rate = 44100
+            t = np.arange(int(rate * 0.5)) / rate
+            tone = 0.2 * np.sin(2 * np.pi * 440 * t)
+            sf.write(wav, np.stack([tone, tone], axis=1), rate)
+            subprocess.run(
+                [executable, "-y", "-v", "error", "-i", str(wav),
+                 "-c:a", "aac", "-b:a", "128k", str(m4a)],
+                check=True,
+            )
+            data = decode_with_ffmpeg(m4a, 48000)
+            self.assertEqual(data.shape[1], 2)
+            self.assertAlmostEqual(data.shape[0] / 48000, 0.5, places=1)
+            self.assertGreater(float(np.abs(data).max()), 0.01)
 
 
 if __name__ == "__main__":
