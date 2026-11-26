@@ -168,6 +168,86 @@ THEMES: dict[str, Theme] = {
             (1.00, (255, 255, 255)),
         ),
     ),
+    "sunset": Theme(
+        name="sunset",
+        label="Sunset",
+        accent=(255, 150, 110),
+        accent_dim=(180, 88, 66),
+        white=(255, 246, 238),
+        text=(232, 210, 198),
+        dim=(160, 124, 112),
+        dim2=(84, 60, 52),
+        warn=(255, 220, 120),
+        lyric_todo=(150, 115, 102),
+        lyric_context=(126, 96, 86),
+        eq_stops=(
+            (0.00, (40, 16, 60)),
+            (0.30, (120, 40, 120)),
+            (0.58, (255, 90, 130)),
+            (0.82, (255, 150, 90)),
+            (1.00, (255, 238, 190)),
+        ),
+    ),
+    "cyber": Theme(
+        name="cyber",
+        label="Cyber",
+        accent=(210, 255, 80),
+        accent_dim=(140, 178, 50),
+        white=(245, 255, 220),
+        text=(204, 230, 180),
+        dim=(116, 150, 96),
+        dim2=(54, 70, 42),
+        warn=(255, 110, 200),
+        lyric_todo=(110, 140, 90),
+        lyric_context=(90, 116, 74),
+        eq_stops=(
+            (0.00, (12, 24, 60)),
+            (0.30, (20, 120, 180)),
+            (0.60, (40, 240, 230)),
+            (0.82, (200, 255, 90)),
+            (1.00, (255, 255, 230)),
+        ),
+    ),
+    "crimson": Theme(
+        name="crimson",
+        label="Crimson",
+        accent=(255, 94, 110),
+        accent_dim=(178, 50, 66),
+        white=(255, 238, 240),
+        text=(232, 196, 202),
+        dim=(154, 96, 106),
+        dim2=(78, 42, 50),
+        warn=(255, 190, 100),
+        lyric_todo=(142, 90, 100),
+        lyric_context=(116, 72, 82),
+        eq_stops=(
+            (0.00, (40, 8, 16)),
+            (0.30, (120, 16, 36)),
+            (0.60, (230, 40, 70)),
+            (0.82, (255, 120, 90)),
+            (1.00, (255, 230, 220)),
+        ),
+    ),
+    "lavender": Theme(
+        name="lavender",
+        label="Lavender",
+        accent=(200, 160, 255),
+        accent_dim=(128, 96, 184),
+        white=(246, 240, 255),
+        text=(216, 202, 238),
+        dim=(132, 112, 158),
+        dim2=(64, 52, 84),
+        warn=(255, 190, 150),
+        lyric_todo=(124, 104, 150),
+        lyric_context=(102, 84, 126),
+        eq_stops=(
+            (0.00, (40, 24, 90)),
+            (0.30, (100, 60, 200)),
+            (0.60, (180, 120, 255)),
+            (0.82, (230, 190, 255)),
+            (1.00, (255, 250, 255)),
+        ),
+    ),
 }
 
 THEME_LIST = tuple(THEMES.values())
@@ -196,24 +276,21 @@ def config_path() -> Path:
     return base / "visusic-terminal" / "config.json"
 
 
-def load_theme_name(path: Path | str | None = None) -> str:
+def load_config(path: Path | str | None = None) -> dict:
     target = Path(path) if path is not None else config_path()
     try:
         data = json.loads(target.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return DEFAULT_THEME
-    name = data.get("theme") if isinstance(data, dict) else None
-    return name if name in THEMES else DEFAULT_THEME
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
-def save_theme_name(name: str, path: Path | str | None = None) -> bool:
-    if name not in THEMES:
-        return False
+def save_config(data: dict, path: Path | str | None = None) -> bool:
     target = Path(path) if path is not None else config_path()
     temp = target.with_suffix(target.suffix + ".tmp")
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
-        temp.write_text(json.dumps({"theme": name}, ensure_ascii=False) + "\n",
+        temp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n",
                         encoding="utf-8")
         os.replace(temp, target)
         return True
@@ -223,3 +300,26 @@ def save_theme_name(name: str, path: Path | str | None = None) -> bool:
         except OSError:
             pass
         return False
+
+
+def load_setting(key: str, default=None,
+                 path: Path | str | None = None):
+    return load_config(path).get(key, default)
+
+
+def save_setting(key: str, value,
+                 path: Path | str | None = None) -> bool:
+    data = load_config(path)
+    data[key] = value
+    return save_config(data, path)
+
+
+def load_theme_name(path: Path | str | None = None) -> str:
+    name = load_setting("theme", DEFAULT_THEME, path)
+    return name if name in THEMES else DEFAULT_THEME
+
+
+def save_theme_name(name: str, path: Path | str | None = None) -> bool:
+    if name not in THEMES:
+        return False
+    return save_setting("theme", name, path)

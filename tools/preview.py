@@ -149,6 +149,8 @@ def main() -> None:
                         help="show the theme menu with this preset selected")
     parser.add_argument("--playlist", action="store_true",
                         help="show the playlist overlay")
+    parser.add_argument("--eq-menu", type=int, default=None,
+                        help="show the sound preset menu with this selected")
     parser.add_argument("--out", default="docs/preview.html")
     parser.add_argument("--title", default="VisuSic Terminal — preview")
     args = parser.parse_args()
@@ -158,12 +160,14 @@ def main() -> None:
     theme = get_theme(args.theme)
     playlist = sample_playlist(theme) if args.playlist else None
     lines = render(frame, width, height, theme, menu=args.menu,
-                   playlist=playlist)
+                   playlist=playlist, eq_menu=args.eq_menu)
     body = ansi_to_html(lines)
     if args.menu is not None:
         args.title = f"{args.title} · themes"
     if args.playlist:
         args.title = f"{args.title} · playlist"
+    if args.eq_menu is not None:
+        args.title = f"{args.title} · sound"
 
     page = f"""<!doctype html>
 <html lang="ru">

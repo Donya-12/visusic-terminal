@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from .equalizer import EQ_LIST
 from .lrc import Lyrics
 from .theme import (
     Color,
@@ -44,13 +45,14 @@ _FULL_HINT = (
     ("[ ]", " sync  "),
     ("t", " theme  "),
     ("l", " list  "),
+    ("e", " eq  "),
     ("q", " quit"),
 )
 _SHORT_HINT = (
     ("spc", " play  "),
     ("←→", " seek  "),
     ("n/p", " next  "),
-    ("l/t", " menu  "),
+    ("l/t/e", " menu  "),
     ("q", " quit"),
 )
 
@@ -654,11 +656,63 @@ def _draw_playlist(canvas: Canvas, theme: Theme, view: PlaylistView) -> None:
     draw_segments(canvas, x + 2, footer_y, segments, box_w - 4)
 
 
+def _draw_eq_menu(canvas: Canvas, theme: Theme, selected: int) -> None:
+    presets = EQ_LIST
+    selected = max(0, min(len(presets) - 1, int(selected)))
+    box_w = min(64, max(26, canvas.w - 4))
+    rows = min(len(presets), max(2, canvas.h - 4))
+    box_h = rows + 4
+    x = max(0, (canvas.w - box_w) // 2)
+    y = max(0, (canvas.h - box_h) // 2)
+
+    canvas.rect(x, y, x + box_w, y + box_h)
+    canvas.put(x, y, "┌" + "─" * (box_w - 2) + "┐", theme.accent_dim)
+    for row in range(y + 1, y + box_h - 1):
+        canvas.put(x, row, "│", theme.accent_dim)
+        canvas.put(x + box_w - 1, row, "│", theme.accent_dim)
+    canvas.put(x, y + box_h - 1, "└" + "─" * (box_w - 2) + "┘",
+               theme.accent_dim)
+
+    canvas.put(x + 2, y + 1, "SOUND PRESET", theme.accent, True)
+    start = max(0, min(selected - rows // 2, len(presets) - rows))
+    name_x = x + 3
+    desc_x = name_x + 14
+    for slot in range(rows):
+        index = start + slot
+        preset = presets[index]
+        row_y = y + 2 + slot
+        is_selected = index == selected
+        if is_selected:
+            canvas.put(x + 1, row_y, "▌", theme.accent, True)
+        canvas.put(name_x, row_y, fit_text(preset.label, 13),
+                   theme.white if is_selected else theme.dim,
+                   is_selected)
+        canvas.put(desc_x, row_y,
+                   fit_text(preset.description, x + box_w - 3 - desc_x),
+                   theme.text if is_selected else theme.dim2)
+
+    footer_y = y + box_h - 2
+    if box_w >= 48:
+        segments = [
+            ("↑↓", theme.accent, True), (" listen   ", theme.dim, False),
+            ("Enter", theme.accent, True), (" apply   ", theme.dim, False),
+            ("Esc", theme.accent, True), (" cancel", theme.dim, False),
+        ]
+    else:
+        segments = [
+            ("↑↓", theme.accent, True), (" · ", theme.dim, False),
+            ("Enter", theme.accent, True), (" · ", theme.dim, False),
+            ("Esc", theme.accent, True),
+        ]
+    draw_segments(canvas, x + 2, footer_y, segments, box_w - 4)
+
+
 # -------------------------------------------------------------------- public
 def render(frame: Frame, width: int, height: int,
            theme: Theme | str | None = None,
            menu: int | None = None,
-           playlist: PlaylistView | None = None) -> list[str]:
+           playlist: PlaylistView | None = None,
+           eq_menu: int | None = None) -> list[str]:
     if isinstance(theme, str):
         theme = get_theme(theme)
     if theme is None:
@@ -703,5 +757,8 @@ def render(frame: Frame, width: int, height: int,
     elif playlist is not None:
         canvas.dim(0.35)
         _draw_playlist(canvas, theme, playlist)
+    elif eq_menu is not None:
+        canvas.dim(0.35)
+        _draw_eq_menu(canvas, theme, eq_menu)
 
     return canvas.to_lines()

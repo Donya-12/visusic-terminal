@@ -17,6 +17,7 @@ import numpy as np
 import sounddevice as sd
 import soundfile as sf
 
+from .equalizer import design_taps, get_eq
 from .library import Track
 
 
@@ -111,6 +112,12 @@ class Player:
         self._playing = False
         self._finished = False
         self._latency = 0.0
+        self._eq_name = "flat"
+        self._eq_h = None
+        self._eq_taps = None
+        self._eq_taps_len = 0
+        self._eq_nfft = 2048
+        self._eq_delay = 0.0
         self.sr = 0
         self.duration = 0.0
         self.stream: sd.OutputStream | None = None
@@ -187,11 +194,55 @@ class Player:
             end = min(start + frames, len(self._samples))
             count = end - start
             if count > 0:
-                np.multiply(self._samples[start:end], self._volume,
-                            out=outdata[:count])
+                block = self._samples[start:end]
+                if self._eq_h is not None:
+                    taps_len = self._eq_taps_len
+                    need = frames + taps_len - 1
+                    if need <= self._eq_nfft:
+                        segment = np.zeros((need, 2), dtype=np.float32)
+                        src_start = max(0, start - (taps_len - 1))
+                        source = self._samples[src_start:end]
+                        offset = (taps_len - 1) - (start - src_start)
+                        segment[offset:offset + len(source)] = source
+                        spectrum = np.fft.rfft(segment, axis=0)
+                        spectrum *= self._eq_h[:, None]
+                        filtered = np.fft.irfft(spectrum, n=self._eq_nfft,
+                                                axis=0)
+                        block = filtered[-frames:][:count]
+                    else:
+                        block = self._samples[start:end]
+                np.multiply(block, self._volume, out=outdata[:count])
+                np.clip(outdata[:count], -1.0, 1.0, out=outdata[:count])
             self._cursor = end
             if end >= len(self._samples):
                 self._finished = True
+
+    def set_eq(self, name: str) -> None:
+        preset = get_eq(name)
+        taps = design_taps(preset, self.sr)
+        if taps is None:
+            with self._lock:
+                self._eq_name = preset.name
+                self._eq_h = None
+                self._eq_taps = None
+                self._eq_taps_len = 0
+                self._eq_delay = 0.0
+            return
+
+        nfft = 1 << (1024 + len(taps) - 2).bit_length()
+        transformed = np.fft.rfft(taps, nfft)
+        with self._lock:
+            self._eq_name = preset.name
+            self._eq_taps = taps
+            self._eq_taps_len = len(taps)
+            self._eq_nfft = nfft
+            self._eq_h = transformed
+            self._eq_delay = (len(taps) - 1) / 2.0 / self.sr
+
+    @property
+    def eq_name(self) -> str:
+        with self._lock:
+            return self._eq_name
 
     # ------------------------------------------------------------- transport
     def load(self, track: Track, autoplay: bool = True) -> float:
@@ -273,7 +324,7 @@ class Player:
         with self._lock:
             cursor = self._cursor
             finished = self._finished
-            latency = self._latency
+            latency = self._latency + self._eq_delay
         if self.duration <= 0:
             return 0.0
         if finished:
@@ -297,7 +348,7 @@ class Player:
         with self._lock:
             samples = self._samples
             cursor = self._cursor
-            latency = self._latency
+            latency = self._latency + self._eq_delay
         if samples is None:
             return np.zeros(size, dtype=np.float32)
 

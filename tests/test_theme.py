@@ -10,8 +10,10 @@ from visusic.theme import (
     THEME_LIST,
     THEMES,
     get_theme,
+    load_setting,
     load_theme_name,
     mix,
+    save_setting,
     save_theme_name,
 )
 
@@ -69,6 +71,15 @@ class ThemeTests(unittest.TestCase):
             self.assertEqual(load_theme_name(path), DEFAULT_THEME)
             self.assertFalse(save_theme_name("nope", path))
             self.assertEqual(load_theme_name(path), DEFAULT_THEME)
+
+    def test_settings_merge(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.json"
+            self.assertTrue(save_theme_name("matrix", path))
+            self.assertTrue(save_setting("eq", "bass", path))
+            self.assertTrue(save_theme_name("ice", path))
+            self.assertEqual(load_theme_name(path), "ice")
+            self.assertEqual(load_setting("eq", "flat", path), "bass")
 
 
 if __name__ == "__main__":

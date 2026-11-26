@@ -166,6 +166,18 @@ class LayoutTests(unittest.TestCase):
             for line in lines:
                 self.assertEqual(text_width(plain(line)), width)
 
+    def test_eq_menu(self) -> None:
+        for width, height in ((100, 30), (60, 12), (28, 8)):
+            lines = render(frame_with(), width, height,
+                           get_theme("aurora"), eq_menu=1)
+            text = plain("\n".join(lines))
+            self.assertEqual(len(lines), height)
+            self.assertIn("SOUND PRESET", text)
+            self.assertIn("Bass Boost", text)
+            self.assertIn("Enter", text)
+            for line in lines:
+                self.assertEqual(text_width(plain(line)), width)
+
 
 class TextTests(unittest.TestCase):
     def test_fit_text(self) -> None:

@@ -9,6 +9,8 @@ from pathlib import Path
 
 from . import __version__
 from .app import App
+from .discord import load_client_id, save_client_id, valid_client_id
+from .equalizer import eq_names
 from .library import scan
 from .player import AudioError
 from .theme import theme_names
@@ -34,6 +36,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--theme", choices=theme_names(), default=None,
         help="color theme for this run (default: saved theme, or aurora)",
+    )
+    parser.add_argument(
+        "--eq", choices=eq_names(), default=None,
+        help="audio preset for this run (default: saved preset, or flat)",
+    )
+    parser.add_argument(
+        "--discord-id", default=None, metavar="ID",
+        help="Discord Application ID for Rich Presence (saved for later runs)",
+    )
+    parser.add_argument(
+        "--no-discord", action="store_true",
+        help="disable Discord Rich Presence for this run",
     )
     parser.add_argument(
         "--version", action="version", version=f"visusic {__version__}",
@@ -63,8 +77,22 @@ def main(argv: list[str] | None = None) -> int:
 
     if not tracks:
         print(f"No audio files found in {target}", file=sys.stderr)
-        print("Supported: mp3, flac, wav, ogg, opus, aiff", file=sys.stderr)
+        print("Supported: mp3, flac, wav, ogg, opus, m4a, aac, wma, aiff, "
+              "alac, ape, wv, mka", file=sys.stderr)
         return 2
+
+    discord_id = load_client_id()
+    if args.discord_id:
+        if not valid_client_id(args.discord_id):
+            print("Discord Application ID must be a 15-25 digit number.",
+                  file=sys.stderr)
+            return 2
+        if not save_client_id(args.discord_id):
+            print("Could not save the Discord ID; using it for this run.",
+                  file=sys.stderr)
+        discord_id = args.discord_id
+    if args.no_discord:
+        discord_id = ""
 
     try:
         app = App(
@@ -72,6 +100,8 @@ def main(argv: list[str] | None = None) -> int:
             fps=max(5, min(60, args.fps)),
             volume=max(0, min(100, args.volume)) / 100.0,
             theme=args.theme,
+            eq=args.eq,
+            discord_id=discord_id,
         )
         app.run()
     except AudioError as exc:

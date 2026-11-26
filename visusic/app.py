@@ -7,19 +7,24 @@ from dataclasses import replace
 from pathlib import Path
 
 from . import metadata, term
+from .discord import DiscordPresence, load_client_id
 from .keys import KeyReader
+from .equalizer import EQ_LIST, get_eq
 from .library import Track
 from .lrc import Lyrics, find_for_audio, load as load_lyrics
 from .player import AudioError, Player
 from .smtc import MediaSession
 from .spectrum import Spectrum, bands_for_width
-from .theme import THEME_LIST, get_theme, load_theme_name, save_theme_name
+from .theme import (THEME_LIST, get_theme, load_setting, load_theme_name,
+                    save_setting, save_theme_name)
 from .ui import (Frame, PlaylistRow, PlaylistView, fmt_time, render)
 
 
 class App:
     def __init__(self, tracks: list[Track], fps: int = 30,
-                 volume: float = 0.75, theme: str | None = None) -> None:
+                 volume: float = 0.75, theme: str | None = None,
+                 eq: str | None = None,
+                 discord_id: str | None = None) -> None:
         if not tracks:
             raise ValueError("playlist is empty")
         self.tracks = tracks
@@ -31,8 +36,16 @@ class App:
         self.lyrics: Lyrics | None = None
         self.lyric_offset = 0.0
         self.theme = get_theme(theme or load_theme_name())
+        self.eq = get_eq(eq or load_setting("eq", "flat"))
+        self.player.set_eq(self.eq.name)
+        self.discord_id = (discord_id if discord_id is not None
+                           else load_client_id())
+        self.discord: DiscordPresence | None = None
+        self._discord_warned = False
         self.menu_index: int | None = None
         self._menu_original: str | None = None
+        self.eq_menu_index: int | None = None
+        self._eq_original: str | None = None
 
         self.playlist_index: int | None = None
         self.playlist_rows: list[PlaylistRow] = []
@@ -102,6 +115,7 @@ class App:
             self._load_playlist_metadata(center)
         if self.smtc is not None:
             self._sync_media(force=True)
+        self._sync_discord(force=True)
 
     def _load_any(self, index: int, autoplay: bool = True) -> bool:
         last_error = ""
@@ -194,6 +208,43 @@ class App:
             self.player.seek(target)
             self.toast(f"seek · {fmt_time(target)}")
         self._sync_media(force=True)
+        self._sync_discord(force=True)
+
+    # ------------------------------------------------------------- discord
+    def _start_discord(self) -> None:
+        if not self.discord_id:
+            return
+        try:
+            image = str(load_setting("discord_image", "") or "").strip()
+            self.discord = DiscordPresence(self.discord_id, image=image)
+        except Exception as exc:
+            self.discord = None
+            self.toast(f"Discord: {exc}", 3.5)
+            return
+        self._sync_discord(force=True)
+
+    def _sync_discord(self, force: bool = False) -> None:
+        if self.discord is None:
+            return
+        try:
+            self.discord.update(
+                title=self.track.title,
+                artist=self.track.artist,
+                album=self.track.album,
+                position=self.player.position(),
+                duration=self.duration,
+                playing=self.player.playing,
+                force=force,
+            )
+        except Exception as exc:
+            try:
+                self.discord.close()
+            except Exception:
+                pass
+            self.discord = None
+            if not self._discord_warned:
+                self._discord_warned = True
+                self.toast(f"Discord unavailable · {exc}", 3.5)
 
     # ------------------------------------------------------------- playlist
     def _ensure_playlist(self) -> None:
@@ -300,14 +351,59 @@ class App:
             self._running = False
         elif len(key) == 1 and key.isdigit():
             index = int(key) - 1
+            if key == "0" and len(THEME_LIST) >= 10:
+                index = 9
             if 0 <= index < len(THEME_LIST):
                 self._preview_theme(index)
                 self._close_theme_menu(True)
+
+    # ---------------------------------------------------------------- audio EQ
+    def _open_eq_menu(self) -> None:
+        self._eq_original = self.eq.name
+        names = [preset.name for preset in EQ_LIST]
+        self.eq_menu_index = (names.index(self.eq.name)
+                              if self.eq.name in names else 0)
+
+    def _preview_eq(self, index: int) -> None:
+        self.eq_menu_index = index % len(EQ_LIST)
+        self.eq = EQ_LIST[self.eq_menu_index]
+        self.player.set_eq(self.eq.name)
+
+    def _close_eq_menu(self, apply: bool) -> None:
+        if apply:
+            saved = save_setting("eq", self.eq.name)
+            suffix = "" if saved else " · config not saved"
+            self.toast(f"sound · {self.eq.label}{suffix}", 2.0)
+        else:
+            if self._eq_original:
+                self.eq = get_eq(self._eq_original)
+            self.player.set_eq(self.eq.name)
+            self.toast(f"sound · {self.eq.label}", 1.2)
+        self.eq_menu_index = None
+        self._eq_original = None
+
+    def _handle_eq_menu_key(self, key: str) -> None:
+        if key == "esc":
+            self._close_eq_menu(False)
+        elif key == "up":
+            self._preview_eq((self.eq_menu_index or 0) - 1)
+        elif key == "down":
+            self._preview_eq((self.eq_menu_index or 0) + 1)
+        elif key == "enter":
+            self._close_eq_menu(True)
+        elif key in ("q", "ctrl-c"):
+            self._running = False
+        elif len(key) == 1 and key.isdigit():
+            index = int(key) - 1
+            if 0 <= index < len(EQ_LIST):
+                self._preview_eq(index)
+                self._close_eq_menu(True)
 
     def _seek_by(self, delta: float, label: str) -> None:
         target = max(0.0, min(self.duration, self.player.position() + delta))
         self.player.seek(target)
         self.toast(f"{label} · {fmt_time(target)}")
+        self._sync_discord(force=True)
 
     def handle_key(self, key: str) -> None:
         if self.menu_index is not None:
@@ -316,6 +412,9 @@ class App:
         if self.playlist_index is not None:
             self._handle_playlist_key(key)
             return
+        if self.eq_menu_index is not None:
+            self._handle_eq_menu_key(key)
+            return
 
         if key in ("q", "esc", "ctrl-c"):
             self._running = False
@@ -323,6 +422,8 @@ class App:
             self._open_theme_menu()
         elif key in ("l", "tab"):
             self._open_playlist()
+        elif key == "e":
+            self._open_eq_menu()
         elif key == "space":
             self.player.toggle()
         elif key == "left":
@@ -342,6 +443,7 @@ class App:
         elif key == "r" or key == "home":
             self.player.seek(0.0)
             self.toast("restart")
+            self._sync_discord(force=True)
         elif key == "[":
             self.lyric_offset = round(self.lyric_offset - 0.2, 1)
             self.toast(f"lyrics {self.lyric_offset:+.1f} s")
@@ -383,6 +485,7 @@ class App:
             raise AudioError(self._current_status() or "nothing to play")
 
         self._start_media_session()
+        self._start_discord()
         reader = key_source or KeyReader().read
         term.setup()
         if self._smtc_error:
@@ -407,6 +510,7 @@ class App:
 
                 self._advance_if_finished()
                 self._sync_media()
+                self._sync_discord()
 
                 width, height = term.size()
                 if (width, height) != self._size:
@@ -426,7 +530,8 @@ class App:
                     )
                 lines = render(self._make_frame(), width, height,
                                self.theme, menu=self.menu_index,
-                               playlist=playlist)
+                               playlist=playlist,
+                               eq_menu=self.eq_menu_index)
                 prefix = "\x1b[2J\x1b[H" if first else "\x1b[H"
                 term.write(prefix + "\n".join(lines))
                 first = False
@@ -440,6 +545,9 @@ class App:
                 if delay > 0:
                     time.sleep(delay)
         finally:
+            if self.discord is not None:
+                self.discord.close()
+                self.discord = None
             if self.smtc is not None:
                 self.smtc.close()
                 self.smtc = None
