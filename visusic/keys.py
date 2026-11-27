@@ -42,6 +42,8 @@ class KeyReader:
                 keys.append("enter")
             elif char == "\t":
                 keys.append("tab")
+            elif char == "\x08":
+                keys.append("backspace")
             elif char == " ":
                 keys.append("space")
             elif char.isprintable():

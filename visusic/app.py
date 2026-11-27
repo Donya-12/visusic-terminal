@@ -9,6 +9,7 @@ from pathlib import Path
 from . import metadata, term
 from .discord import DiscordPresence, load_client_id
 from .keys import KeyReader
+from .effects import EFFECT_LIST, Background, get_effect
 from .equalizer import (BANDS, CUSTOM_NAME, EQ_LIST, EQPreset, MAX_GAIN,
                         clamp_gains, custom_preset, get_eq)
 from .library import Track
@@ -18,14 +19,39 @@ from .smtc import MediaSession
 from .spectrum import Spectrum, bands_for_width
 from .theme import (THEME_LIST, get_theme, load_setting, load_theme_name,
                     save_setting, save_theme_name)
-from .ui import (EQEditorView, Frame, PlaylistRow, PlaylistView, fmt_time,
-                 render)
+from .ui import (EQEditorView, Frame, HelpView, PlaylistRow, PlaylistView,
+                 SettingsRow, SettingsView, fmt_time, render)
+
+
+_HELP_LINES: tuple[tuple[str, str], ...] = (
+    ("", "PLAYBACK"),
+    ("space", "pause / resume"),
+    ("← / →", "seek −5 / +5 s"),
+    ("↑ / ↓", "volume −5 / +5 %"),
+    ("n / p", "next / previous track"),
+    ("r / home", "restart track"),
+    ("[ / ]", "lyrics sync −0.2 / +0.2 s"),
+    ("", "PLAYLIST"),
+    ("l / tab", "open playlist"),
+    ("type", "search title / artist"),
+    ("↑ / ↓", "select result"),
+    ("pgup/pgdn", "jump 6 results"),
+    ("enter", "play selected"),
+    ("esc", "clear search / close"),
+    ("", "SETTINGS & SOUND"),
+    ("s", "settings menu"),
+    ("t / c", "color themes"),
+    ("e", "sound presets"),
+    ("m", "manual 10-band EQ"),
+    ("q / esc", "quit"),
+)
 
 
 class App:
     def __init__(self, tracks: list[Track], fps: int = 30,
                  volume: float = 0.75, theme: str | None = None,
                  eq: str | None = None,
+                 effect: str | None = None,
                  discord_id: str | None = None) -> None:
         if not tracks:
             raise ValueError("playlist is empty")
@@ -49,6 +75,11 @@ class App:
         self.eq = (self.custom_eq if saved_eq == CUSTOM_NAME
                    else get_eq(saved_eq))
         self.player.set_eq_preset(self.eq)
+        saved_effect = effect if effect is not None else load_setting(
+            "effect", "none")
+        if not isinstance(saved_effect, str):
+            saved_effect = "none"
+        self.background = Background(saved_effect)
         self.discord_id = (discord_id if discord_id is not None
                            else load_client_id())
         self.discord: DiscordPresence | None = None
@@ -60,9 +91,14 @@ class App:
         self.eq_edit_band: int | None = None
         self.eq_edit_gains: list[float] = []
         self._eq_edit_original: EQPreset | None = None
+        self.settings_index: int | None = None
+        self.help_scroll: int | None = None
+        self._return_setting: int | None = None
 
         self.playlist_index: int | None = None
         self.playlist_rows: list[PlaylistRow] = []
+        self.playlist_query = ""
+        self.playlist_matches: list[int] = []
         self._current_cover: bytes | None = None
 
         self.smtc: MediaSession | None = None
@@ -261,6 +297,33 @@ class App:
             ]
             for row in self.playlist_rows:
                 row.current = row.index == self.index
+            self._refresh_playlist_matches()
+
+    def _playlist_filter(self) -> list[int]:
+        query = self.playlist_query.casefold().strip()
+        if not query:
+            return list(range(len(self.playlist_rows)))
+        matches = []
+        for index, row in enumerate(self.playlist_rows):
+            haystack = f"{row.title} {row.artist} {row.album}".casefold()
+            if query in haystack:
+                matches.append(index)
+        return matches
+
+    def _refresh_playlist_matches(self) -> None:
+        self.playlist_matches = self._playlist_filter()
+        if self.playlist_index is None or not self.playlist_matches:
+            return
+        if self.playlist_index not in self.playlist_matches:
+            if self.index in self.playlist_matches:
+                self.playlist_index = self.index
+            else:
+                self.playlist_index = self.playlist_matches[0]
+            self._load_playlist_metadata(self.playlist_index)
+
+    def _set_playlist_query(self, query: str) -> None:
+        self.playlist_query = query[:48]
+        self._refresh_playlist_matches()
 
     def _load_playlist_metadata(self, center: int) -> None:
         if not self.playlist_rows:
@@ -283,27 +346,53 @@ class App:
 
     def _open_playlist(self) -> None:
         self._ensure_playlist()
+        self.playlist_query = ""
         self.playlist_index = self.index
         for row in self.playlist_rows:
             row.current = row.index == self.index
+        self._refresh_playlist_matches()
         self._load_playlist_metadata(self.index)
 
     def _close_playlist(self) -> None:
         self.playlist_index = None
+        self.playlist_query = ""
+        self.playlist_matches = []
 
     def _move_playlist(self, delta: int) -> None:
-        if self.playlist_index is None or not self.playlist_rows:
+        if self.playlist_index is None or not self.playlist_matches:
             return
-        index = max(0, min(len(self.playlist_rows) - 1,
-                           self.playlist_index + delta))
-        self.playlist_index = index
-        self._load_playlist_metadata(index)
+        try:
+            position = self.playlist_matches.index(self.playlist_index)
+        except ValueError:
+            position = 0
+        position = max(0, min(len(self.playlist_matches) - 1,
+                              position + delta))
+        self.playlist_index = self.playlist_matches[position]
+        self._load_playlist_metadata(self.playlist_index)
+
+    def _move_playlist_edge(self, first: bool) -> None:
+        if not self.playlist_matches:
+            return
+        self.playlist_index = self.playlist_matches[0 if first else -1]
+        self._load_playlist_metadata(self.playlist_index)
 
     def _handle_playlist_key(self, key: str) -> None:
-        if key in ("esc", "l", "tab"):
+        if key == "esc":
+            if self.playlist_query:
+                self._set_playlist_query("")
+            else:
+                self._close_playlist()
+        elif key == "tab":
             self._close_playlist()
-        elif key in ("q", "ctrl-c"):
+        elif key == "ctrl-c":
             self._running = False
+        elif key == "backspace":
+            if self.playlist_query:
+                self._set_playlist_query(self.playlist_query[:-1])
+        elif key == "space":
+            self._set_playlist_query(self.playlist_query + " ")
+        elif len(key) == 1:
+            self._set_playlist_query(self.playlist_query + key)
         elif key == "up":
             self._move_playlist(-1)
         elif key == "down":
@@ -313,10 +402,12 @@ class App:
         elif key == "pagedown":
             self._move_playlist(6)
         elif key == "home":
-            self._move_playlist(-len(self.playlist_rows))
+            self._move_playlist_edge(True)
         elif key == "end":
-            self._move_playlist(len(self.playlist_rows))
+            self._move_playlist_edge(False)
         elif key == "enter" and self.playlist_index is not None:
+            if self.playlist_index not in self.playlist_matches:
+                return
             index = self.playlist_index
             self._close_playlist()
             self._load_any(index, autoplay=True)
@@ -343,6 +434,7 @@ class App:
             self.toast(f"theme · {self.theme.label}", 1.2)
         self.menu_index = None
         self._menu_original = None
+        self._return_from_overlay()
 
     def _handle_theme_menu_key(self, key: str) -> None:
         if key == "esc":
@@ -396,6 +488,7 @@ class App:
             self.toast(f"sound · {self.eq.label}", 1.2)
         self.eq_menu_index = None
         self._eq_original = None
+        self._return_from_overlay()
 
     def _handle_eq_menu_key(self, key: str) -> None:
         if key == "esc":
@@ -451,6 +544,7 @@ class App:
         self._eq_edit_original = None
         suffix = "" if saved else " · config not saved"
         self.toast(f"custom eq saved{suffix}", 2.2)
+        self._return_from_overlay()
 
     def _close_eq_editor(self, apply: bool) -> None:
         if apply:
@@ -462,6 +556,7 @@ class App:
         self.eq_edit_band = None
         self._eq_edit_original = None
         self.toast(f"sound · {self.eq.label}", 1.2)
+        self._return_from_overlay()
 
     def _handle_eq_editor_key(self, key: str) -> None:
         if key == "esc":
@@ -489,6 +584,140 @@ class App:
         elif key == "enter":
             self._close_eq_editor(True)
 
+    # ------------------------------------------------------------- settings
+    def _settings_rows(self) -> list[SettingsRow]:
+        return [
+            SettingsRow("Sound", self.eq.label,
+                        "Enter — пресеты · M — ручной EQ"),
+            SettingsRow("Theme", self.theme.label,
+                        "Enter — все темы · ←→ — листать"),
+            SettingsRow("Background", self.background.effect.label,
+                        self.background.effect.description),
+            SettingsRow("Key bindings", "view", "все горячие клавиши"),
+        ]
+
+    def _open_settings(self) -> None:
+        self.settings_index = 0
+        self._return_setting = None
+
+    def _close_settings(self) -> None:
+        self.settings_index = None
+        self._return_setting = None
+
+    def _return_from_overlay(self) -> None:
+        if self._return_setting is not None:
+            self.settings_index = self._return_setting
+            self._return_setting = None
+
+    def _cycle_eq(self, delta: int) -> None:
+        presets = self.eq_presets
+        names = [preset.name for preset in presets]
+        index = names.index(self.eq.name) if self.eq.name in names else 0
+        preset = presets[(index + delta) % len(presets)]
+        self.eq = preset
+        self.player.set_eq_preset(preset)
+        saved = save_setting("eq", preset.name)
+        if preset.name == CUSTOM_NAME:
+            saved = (save_setting(
+                "eq_gains", [round(gain, 1) for gain in self.custom_gains]
+            ) and saved)
+        suffix = "" if saved else " · config not saved"
+        self.toast(f"sound · {preset.label}{suffix}", 1.5)
+
+    def _cycle_theme(self, delta: int) -> None:
+        names = [theme.name for theme in THEME_LIST]
+        index = names.index(self.theme.name) if self.theme.name in names else 0
+        theme = THEME_LIST[(index + delta) % len(THEME_LIST)]
+        self.theme = theme
+        saved = save_theme_name(theme.name)
+        suffix = "" if saved else " · config not saved"
+        self.toast(f"theme · {theme.label}{suffix}", 1.5)
+
+    def _cycle_effect(self, delta: int) -> None:
+        names = [effect.name for effect in EFFECT_LIST]
+        index = (names.index(self.background.name)
+                 if self.background.name in names else 0)
+        name = names[(index + delta) % len(names)]
+        self.background.set_effect(name)
+        saved = save_setting("effect", name)
+        suffix = "" if saved else " · config not saved"
+        effect = get_effect(name)
+        self.toast(f"background · {effect.label}{suffix}", 1.5)
+
+    def _cycle_setting(self, delta: int) -> None:
+        if self.settings_index is None:
+            return
+        if self.settings_index == 0:
+            self._cycle_eq(delta)
+        elif self.settings_index == 1:
+            self._cycle_theme(delta)
+        elif self.settings_index == 2:
+            self._cycle_effect(delta)
+
+    def _activate_setting(self) -> None:
+        if self.settings_index is None:
+            return
+        if self.settings_index == 0:
+            self._return_setting = 0
+            self.settings_index = None
+            self._open_eq_menu()
+        elif self.settings_index == 1:
+            self._return_setting = 1
+            self.settings_index = None
+            self._open_theme_menu()
+        elif self.settings_index == 2:
+            self._cycle_effect(1)
+        elif self.settings_index == 3:
+            self._return_setting = 3
+            self.settings_index = None
+            self._open_help()
+
+    def _handle_settings_key(self, key: str) -> None:
+        if key == "esc":
+            self._close_settings()
+        elif key == "up":
+            self.settings_index = ((self.settings_index or 0) - 1) % 4
+        elif key == "down":
+            self.settings_index = ((self.settings_index or 0) + 1) % 4
+        elif key == "left":
+            self._cycle_setting(-1)
+        elif key == "right":
+            self._cycle_setting(1)
+        elif key == "enter":
+            self._activate_setting()
+        elif key == "m":
+            self._return_setting = 0
+            self.settings_index = None
+            self._open_eq_editor()
+        elif key in ("q", "ctrl-c"):
+            self._close_settings()
+            self._running = False
+
+    # ----------------------------------------------------------- key help
+    def _open_help(self) -> None:
+        self.help_scroll = 0
+
+    def _close_help(self) -> None:
+        self.help_scroll = None
+        self._return_from_overlay()
+
+    def _handle_help_key(self, key: str) -> None:
+        if key in ("esc", "enter", "s"):
+            self._close_help()
+        elif key in ("q", "ctrl-c"):
+            self._close_help()
+            self._running = False
+        elif key == "up":
+            self.help_scroll = max(0, (self.help_scroll or 0) - 1)
+        elif key == "down":
+            self.help_scroll = min(len(_HELP_LINES) - 1,
+                                   (self.help_scroll or 0) + 1)
+        elif key == "pageup":
+            self.help_scroll = max(0, (self.help_scroll or 0) - 6)
+        elif key == "pagedown":
+            self.help_scroll = min(len(_HELP_LINES) - 1,
+                                   (self.help_scroll or 0) + 6)
+
     def _seek_by(self, delta: float, label: str) -> None:
         target = max(0.0, min(self.duration, self.player.position() + delta))
         self.player.seek(target)
@@ -498,6 +727,12 @@ class App:
     def handle_key(self, key: str) -> None:
         if self.eq_edit_band is not None:
             self._handle_eq_editor_key(key)
+            return
+        if self.help_scroll is not None:
+            self._handle_help_key(key)
+            return
+        if self.settings_index is not None:
+            self._handle_settings_key(key)
             return
         if self.menu_index is not None:
             self._handle_theme_menu_key(key)
@@ -519,6 +754,8 @@ class App:
             self._open_eq_menu()
         elif key == "m":
             self._open_eq_editor()
+        elif key == "s":
+            self._open_settings()
         elif key == "space":
             self.player.toggle()
         elif key == "left":
@@ -622,6 +859,8 @@ class App:
                         rows=self.playlist_rows,
                         selected=self.playlist_index,
                         current=self.index,
+                        matches=self.playlist_matches,
+                        query=self.playlist_query,
                     )
                 eq_editor = None
                 if self.eq_edit_band is not None:
@@ -629,12 +868,30 @@ class App:
                         gains=list(self.eq_edit_gains),
                         band=self.eq_edit_band,
                     )
-                lines = render(self._make_frame(), width, height,
+                settings = None
+                if self.settings_index is not None:
+                    settings = SettingsView(
+                        rows=self._settings_rows(),
+                        selected=self.settings_index,
+                    )
+                help_view = None
+                if self.help_scroll is not None:
+                    help_view = HelpView(
+                        lines=list(_HELP_LINES),
+                        scroll=self.help_scroll,
+                    )
+                frame = self._make_frame()
+                self.background.update(self._dt, width, height,
+                                       frame.bars, frame.playing)
+                lines = render(frame, width, height,
                                self.theme, menu=self.menu_index,
                                playlist=playlist,
                                eq_menu=self.eq_menu_index,
                                eq_presets=self.eq_presets,
-                               eq_editor=eq_editor)
+                               eq_editor=eq_editor,
+                               settings=settings,
+                               help_view=help_view,
+                               background=self.background)
                 prefix = "\x1b[2J\x1b[H" if first else "\x1b[H"
                 term.write(prefix + "\n".join(lines))
                 first = False

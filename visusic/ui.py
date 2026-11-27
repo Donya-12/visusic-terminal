@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from .effects import Background
 from .equalizer import BANDS, EQ_LIST, MAX_GAIN, clamp_gains
 from .lrc import Lyrics
 from .theme import (
@@ -42,17 +43,18 @@ _FULL_HINT = (
     ("←→", " seek  "),
     ("↑↓", " vol  "),
     ("n/p", " track  "),
+    ("r", " restart  "),
     ("[ ]", " sync  "),
-    ("t", " theme  "),
     ("l", " list  "),
-    ("e/m", " eq  "),
+    ("s", " settings  "),
     ("q", " quit"),
 )
 _SHORT_HINT = (
-    ("spc", " play  "),
-    ("←→", " seek  "),
-    ("n/p", " next  "),
-    ("l/t/e", " menu  "),
+    ("spc", " play "),
+    ("←→", " seek "),
+    ("n/p", " next "),
+    ("l", " list "),
+    ("s", " setup "),
     ("q", " quit"),
 )
 
@@ -92,6 +94,27 @@ class PlaylistView:
     rows: list[PlaylistRow]
     selected: int
     current: int
+    matches: list[int] | None = None
+    query: str = ""
+
+
+@dataclass
+class SettingsRow:
+    label: str
+    value: str
+    hint: str = ""
+
+
+@dataclass
+class SettingsView:
+    rows: list[SettingsRow]
+    selected: int = 0
+
+
+@dataclass
+class HelpView:
+    lines: list[tuple[str, str]]
+    scroll: int = 0
 
 
 @dataclass
@@ -582,10 +605,16 @@ def _draw_playlist(canvas: Canvas, theme: Theme, view: PlaylistView) -> None:
     rows = view.rows
     if not rows:
         return
-    total = len(rows)
-    selected = max(0, min(total - 1, int(view.selected)))
+    matches = (list(view.matches) if view.matches is not None
+               else list(range(len(rows))))
+    matches = [index for index in matches if 0 <= index < len(rows)]
+    total = len(matches)
+    selected = int(view.selected)
+    selected_pos = matches.index(selected) if selected in matches else 0
+
     box_w = min(80, max(24, canvas.w - 4))
-    items = min(6, max(1, (canvas.h - 8) // 4), total)
+    slots = min(6, max(1, (canvas.h - 8) // 4))
+    items = max(1, min(slots, total)) if total else 1
     box_h = items * 4 + 4
     x = max(0, (canvas.w - box_w) // 2)
     y = max(0, (canvas.h - box_h) // 2)
@@ -598,17 +627,30 @@ def _draw_playlist(canvas: Canvas, theme: Theme, view: PlaylistView) -> None:
     canvas.put(x, y + box_h - 1, "└" + "─" * (box_w - 2) + "┘",
                theme.accent_dim)
 
-    canvas.put(x + 2, y + 1, "PLAYLIST", theme.accent, True)
-    counter = f"{total} track" if total == 1 else f"{total} tracks"
-    if text_width(counter) + 16 < box_w:
-        canvas.put(x + box_w - 3 - text_width(counter), y + 1,
-                   counter, theme.dim2)
+    title = "PLAYLIST"
+    if view.query:
+        title = f"PLAYLIST · {total}/{len(rows)}"
+    title = fit_text(title, box_w - 6)
+    canvas.put(x + 2, y + 1, title, theme.accent, True)
 
-    start = max(0, min(selected - items // 2, total - items))
+    search = f"search: {view.query}" if view.query else "type to search"
+    search_width = box_w - 6 - text_width(title) - 2
+    if search_width >= 8:
+        search = fit_text(search, search_width)
+        canvas.put(x + box_w - 3 - text_width(search), y + 1, search,
+                   theme.accent if view.query else theme.dim2)
+
+    start = max(0, min(selected_pos - items // 2, max(0, total - items)))
     compact = box_w < 60
     text_x = x + 5 if compact else x + 12
+    if total == 0:
+        message = (f"no matches for “{view.query}”" if view.query
+                   else "empty playlist")
+        canvas.put(x + 2, y + 2, fit_text(message, box_w - 4), theme.dim)
     for slot in range(items):
-        row_index = start + slot
+        if total == 0:
+            break
+        row_index = matches[start + slot]
         item = rows[row_index]
         item_y = y + 2 + slot * 4
         is_selected = row_index == selected
@@ -655,21 +697,138 @@ def _draw_playlist(canvas: Canvas, theme: Theme, view: PlaylistView) -> None:
         meta_width = max(4, x + box_w - 3 - text_x)
         canvas.put(text_x, item_y + 1, fit_text(artist, meta_width),
                    theme.dim)
-        meta = f"{item.index + 1:02d} / {total}"
+        meta = f"{item.index + 1:02d} / {len(rows)}"
         canvas.put(text_x, item_y + 2, fit_text(meta, meta_width),
                    theme.dim2)
 
     footer_y = y + box_h - 2
-    if box_w >= 52:
+    escape = " clear" if view.query else " close"
+    if box_w >= 58:
         segments = [
-            ("↑↓", theme.accent, True), (" select   ", theme.dim, False),
-            ("Enter", theme.accent, True), (" play   ", theme.dim, False),
-            ("Esc", theme.accent, True), (" close", theme.dim, False),
+            ("type", theme.accent, True), (" search  ", theme.dim, False),
+            ("↑↓", theme.accent, True), (" select  ", theme.dim, False),
+            ("Enter", theme.accent, True), (" play  ", theme.dim, False),
+            ("Esc", theme.accent, True), (escape, theme.dim, False),
+        ]
+    elif box_w >= 40:
+        segments = [
+            ("type", theme.accent, True), (" search · ", theme.dim, False),
+            ("↑↓", theme.accent, True), (" · ", theme.dim, False),
+            ("Enter", theme.accent, True), (" · ", theme.dim, False),
+            ("Esc", theme.accent, True),
         ]
     else:
         segments = [
             ("↑↓", theme.accent, True), (" · ", theme.dim, False),
             ("Enter", theme.accent, True), (" · ", theme.dim, False),
+            ("Esc", theme.accent, True),
+        ]
+    draw_segments(canvas, x + 2, footer_y, segments, box_w - 4)
+
+
+def _draw_settings(canvas: Canvas, theme: Theme,
+                   view: SettingsView) -> None:
+    rows = view.rows
+    if not rows:
+        return
+    selected = max(0, min(len(rows) - 1, int(view.selected)))
+    box_w = min(66, max(24, canvas.w - 4))
+    visible = min(len(rows), max(2, canvas.h - 6))
+    box_h = visible + 6
+    x = max(0, (canvas.w - box_w) // 2)
+    y = max(0, (canvas.h - box_h) // 2)
+    _dialog_box(canvas, theme, x, y, box_w, box_h)
+
+    canvas.put(x + 2, y + 1, "SETTINGS", theme.accent, True)
+    start = max(0, min(selected - visible // 2, len(rows) - visible))
+    compact = box_w < 40
+    label_w = 13 if compact else 15
+    value_x = x + (17 if compact else 19)
+    value_w = max(2, x + box_w - 3 - value_x)
+    for slot in range(visible):
+        index = start + slot
+        item = rows[index]
+        row_y = y + 2 + slot
+        is_selected = index == selected
+        if is_selected:
+            canvas.put(x + 1, row_y, "▌", theme.accent, True)
+        canvas.put(x + 3, row_y, fit_text(item.label, label_w),
+                   theme.white if is_selected else theme.dim, is_selected)
+        canvas.put(value_x, row_y, fit_text(item.value, value_w),
+                   theme.accent if is_selected else theme.text)
+
+    hint = rows[selected].hint
+    if hint:
+        canvas.put(x + 2, y + box_h - 4,
+                   fit_text(hint, box_w - 4), theme.dim2)
+
+    footer_y = y + box_h - 2
+    if box_w >= 48:
+        segments = [
+            ("↑↓", theme.accent, True), (" select  ", theme.dim, False),
+            ("←→", theme.accent, True), (" change  ", theme.dim, False),
+            ("Enter", theme.accent, True), (" open  ", theme.dim, False),
+            ("Esc", theme.accent, True), (" close", theme.dim, False),
+        ]
+    elif box_w >= 40:
+        segments = [
+            ("↑↓", theme.accent, True), (" select · ", theme.dim, False),
+            ("←→", theme.accent, True), (" change · ", theme.dim, False),
+            ("Enter", theme.accent, True), (" · ", theme.dim, False),
+            ("Esc", theme.accent, True),
+        ]
+    elif box_w >= 30:
+        segments = [
+            ("↑↓", theme.accent, True), (" · ", theme.dim, False),
+            ("←→", theme.accent, True), (" · ", theme.dim, False),
+            ("Enter", theme.accent, True), (" · ", theme.dim, False),
+            ("Esc", theme.accent, True),
+        ]
+    else:
+        segments = [
+            ("↑↓", theme.accent, True), (" ", theme.dim, False),
+            ("←→", theme.accent, True), (" ", theme.dim, False),
+            ("Enter", theme.accent, True), (" ", theme.dim, False),
+            ("Esc", theme.accent, True),
+        ]
+    draw_segments(canvas, x + 2, footer_y, segments, box_w - 4)
+
+
+def _draw_help(canvas: Canvas, theme: Theme, view: HelpView) -> None:
+    lines = view.lines
+    if not lines:
+        return
+    box_w = min(62, max(28, canvas.w - 4))
+    visible = min(len(lines), max(2, canvas.h - 4))
+    box_h = visible + 4
+    x = max(0, (canvas.w - box_w) // 2)
+    y = max(0, (canvas.h - box_h) // 2)
+    _dialog_box(canvas, theme, x, y, box_w, box_h)
+
+    canvas.put(x + 2, y + 1, "KEY BINDINGS", theme.accent, True)
+    start = max(0, min(int(view.scroll), max(0, len(lines) - visible)))
+    key_w = 12
+    for slot in range(visible):
+        key, action = lines[start + slot]
+        row_y = y + 2 + slot
+        if not key:
+            canvas.put(x + 2, row_y, fit_text(action, box_w - 4),
+                       theme.accent, True)
+            continue
+        canvas.put(x + 3, row_y, fit_text(key, key_w), theme.accent, True)
+        action_x = x + 3 + key_w + 1
+        canvas.put(action_x, row_y,
+                   fit_text(action, x + box_w - 3 - action_x), theme.text)
+
+    footer_y = y + box_h - 2
+    if box_w >= 40:
+        segments = [
+            ("↑↓", theme.accent, True), (" scroll  ", theme.dim, False),
+            ("Esc", theme.accent, True), (" close", theme.dim, False),
+        ]
+    else:
+        segments = [
+            ("↑↓", theme.accent, True), (" · ", theme.dim, False),
             ("Esc", theme.accent, True),
         ]
     draw_segments(canvas, x + 2, footer_y, segments, box_w - 4)
@@ -928,7 +1087,10 @@ def render(frame: Frame, width: int, height: int,
            playlist: PlaylistView | None = None,
            eq_menu: int | None = None,
            eq_presets=None,
-           eq_editor: EQEditorView | None = None) -> list[str]:
+           eq_editor: EQEditorView | None = None,
+           settings: SettingsView | None = None,
+           help_view: HelpView | None = None,
+           background: Background | None = None) -> list[str]:
     if isinstance(theme, str):
         theme = get_theme(theme)
     if theme is None:
@@ -941,6 +1103,8 @@ def render(frame: Frame, width: int, height: int,
         return canvas.to_lines()
 
     canvas = Canvas(width, height)
+    if background is not None:
+        background.draw(canvas, theme)
 
     if height < 14:
         _draw_header(canvas, frame, theme)
@@ -967,7 +1131,13 @@ def render(frame: Frame, width: int, height: int,
         _draw_lyrics(canvas, frame, theme, lyric_prev, lyric_cur, lyric_next)
         _draw_footer(canvas, frame, theme)
 
-    if menu is not None:
+    if settings is not None:
+        canvas.dim(0.35)
+        _draw_settings(canvas, theme, settings)
+    elif help_view is not None:
+        canvas.dim(0.35)
+        _draw_help(canvas, theme, help_view)
+    elif menu is not None:
         canvas.dim(0.35)
         _draw_theme_menu(canvas, theme, menu)
     elif playlist is not None:

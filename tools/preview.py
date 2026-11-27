@@ -15,11 +15,13 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from visusic.effects import Background, effect_names, get_effect
 from visusic.equalizer import EQ_LIST, custom_preset  # noqa: E402
 from visusic.lrc import parse  # noqa: E402
 from visusic.spectrum import bands_for_width  # noqa: E402
 from visusic.theme import get_theme, theme_names  # noqa: E402
-from visusic.ui import (EQEditorView, Frame, PlaylistRow, PlaylistView,
+from visusic.ui import (EQEditorView, Frame, HelpView, PlaylistRow,
+                        PlaylistView, SettingsRow, SettingsView,
                         render)  # noqa: E402
 
 ANSI = re.compile(r"\x1b\[([0-9;]*)m")
@@ -35,6 +37,29 @@ SAMPLE_LRC = """[ar:Неоновые волны]
 [02:00.00]И фары режут тишину
 [02:16.00]Неоновые волны впереди
 """
+
+SAMPLE_HELP = (
+    ("", "PLAYBACK"),
+    ("space", "pause / resume"),
+    ("← / →", "seek −5 / +5 s"),
+    ("↑ / ↓", "volume −5 / +5 %"),
+    ("n / p", "next / previous track"),
+    ("r / home", "restart track"),
+    ("[ / ]", "lyrics sync −0.2 / +0.2 s"),
+    ("", "PLAYLIST"),
+    ("l / tab", "open playlist"),
+    ("type", "search title / artist"),
+    ("↑ / ↓", "select result"),
+    ("pgup/pgdn", "jump 6 results"),
+    ("enter", "play selected"),
+    ("esc", "clear search / close"),
+    ("", "SETTINGS & SOUND"),
+    ("s", "settings menu"),
+    ("t / c", "color themes"),
+    ("e", "sound presets"),
+    ("m", "manual 10-band EQ"),
+    ("q / esc", "quit"),
+)
 
 
 def ansi_to_html(lines: list[str]) -> str:
@@ -155,6 +180,14 @@ def main() -> None:
                         help="show the sound preset menu with this selected")
     parser.add_argument("--eq-editor", type=int, default=None, metavar="BAND",
                         help="show the manual EQ editor with this band selected")
+    parser.add_argument("--settings", action="store_true",
+                        help="show the settings menu")
+    parser.add_argument("--help-keys", action="store_true",
+                        help="show the key bindings overlay")
+    parser.add_argument("--filter", default="",
+                        help="playlist search query to preview")
+    parser.add_argument("--effect", choices=effect_names(), default=None,
+                        help="background effect to preview")
     parser.add_argument("--out", default="docs/preview.html")
     parser.add_argument("--title", default="VisuSic Terminal — preview")
     args = parser.parse_args()
@@ -163,6 +196,18 @@ def main() -> None:
     frame = sample_frame(bands_for_width(width))
     theme = get_theme(args.theme)
     playlist = sample_playlist(theme) if args.playlist else None
+    if playlist is not None and args.filter:
+        query = args.filter.casefold()
+        matches = [
+            row.index for row in playlist.rows
+            if query in
+            f"{row.title} {row.artist} {row.album}".casefold()
+        ]
+        playlist = PlaylistView(
+            rows=playlist.rows,
+            selected=matches[0] if matches else 0,
+            current=0, matches=matches, query=args.filter,
+        )
     presets = EQ_LIST + (custom_preset(
         (4, 5, 3, 1, 0, -1, 1, 3, 2, -1)),)
     editor = None
@@ -171,9 +216,30 @@ def main() -> None:
             gains=[4, 5, 3, 1, 0, -1, 1, 3, 2, -1],
             band=args.eq_editor,
         )
+    preview_effect = get_effect(args.effect or "snow")
+    settings = None
+    if args.settings:
+        settings = SettingsView(rows=[
+            SettingsRow("Sound", "Bass Boost",
+                        "Enter — пресеты · M — ручной EQ"),
+            SettingsRow("Theme", theme.label,
+                        "Enter — все темы · ←→ — листать"),
+            SettingsRow("Background", preview_effect.label,
+                        preview_effect.description),
+            SettingsRow("Key bindings", "view", "все горячие клавиши"),
+        ], selected=2)
+    help_view = (HelpView(lines=list(SAMPLE_HELP))
+                 if args.help_keys else None)
+    background = None
+    if args.effect:
+        background = Background(args.effect)
+        for _ in range(24):
+            background.update(1 / 30, width, height, frame.bars, True)
     lines = render(frame, width, height, theme, menu=args.menu,
                    playlist=playlist, eq_menu=args.eq_menu,
-                   eq_presets=presets, eq_editor=editor)
+                   eq_presets=presets, eq_editor=editor,
+                   settings=settings, help_view=help_view,
+                   background=background)
     body = ansi_to_html(lines)
     if args.menu is not None:
         args.title = f"{args.title} · themes"
@@ -183,6 +249,12 @@ def main() -> None:
         args.title = f"{args.title} · sound"
     if args.eq_editor is not None:
         args.title = f"{args.title} · manual eq"
+    if args.settings:
+        args.title = f"{args.title} · settings"
+    if args.help_keys:
+        args.title = f"{args.title} · keys"
+    if args.effect:
+        args.title = f"{args.title} · {args.effect}"
 
     page = f"""<!doctype html>
 <html lang="ru">

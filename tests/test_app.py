@@ -119,6 +119,117 @@ class AppEqTests(unittest.TestCase):
         saved = json.loads(self.config.read_text(encoding="utf-8"))
         self.assertEqual(saved["eq"], "custom")
 
+    def test_settings_cycles_background_and_saves(self) -> None:
+        app = self.make_app()
+        app.handle_key("s")
+        self.assertEqual(app.settings_index, 0)
+        app.handle_key("down")
+        app.handle_key("down")
+        self.assertEqual(app.settings_index, 2)
+        start = app.background.name
+        app.handle_key("right")
+        self.assertNotEqual(app.background.name, start)
+        saved = json.loads(self.config.read_text(encoding="utf-8"))
+        self.assertEqual(saved["effect"], app.background.name)
+        app.handle_key("left")
+        self.assertEqual(app.background.name, start)
+
+    def test_settings_opens_sound_and_theme_menus(self) -> None:
+        app = self.make_app()
+        app.handle_key("s")
+        app.handle_key("enter")
+        self.assertIsNone(app.settings_index)
+        self.assertIsNotNone(app.eq_menu_index)
+        app.handle_key("esc")
+        self.assertEqual(app.settings_index, 0)
+
+        app.handle_key("down")
+        app.handle_key("enter")
+        self.assertIsNone(app.settings_index)
+        self.assertIsNotNone(app.menu_index)
+        app.handle_key("esc")
+        self.assertEqual(app.settings_index, 1)
+        app.handle_key("esc")
+        self.assertIsNone(app.settings_index)
+
+    def test_settings_opens_manual_eq_and_returns(self) -> None:
+        app = self.make_app(eq="bass")
+        app.handle_key("s")
+        app.handle_key("m")
+        self.assertIsNone(app.settings_index)
+        self.assertIsNotNone(app.eq_edit_band)
+        app.handle_key("esc")
+        self.assertIsNone(app.eq_edit_band)
+        self.assertEqual(app.settings_index, 0)
+
+    def test_settings_help_scrolls(self) -> None:
+        app = self.make_app()
+        app.handle_key("s")
+        for _ in range(3):
+            app.handle_key("down")
+        app.handle_key("enter")
+        self.assertIsNone(app.settings_index)
+        self.assertEqual(app.help_scroll, 0)
+        app.handle_key("down")
+        self.assertEqual(app.help_scroll, 1)
+        app.handle_key("pageup")
+        self.assertEqual(app.help_scroll, 0)
+        app.handle_key("esc")
+        self.assertIsNone(app.help_scroll)
+        self.assertEqual(app.settings_index, 3)
+
+    def test_playlist_search_filters_and_navigates(self) -> None:
+        tracks = [
+            Track(path=Path("a.mp3"), artist="Alpha", title="First Song"),
+            Track(path=Path("b.mp3"), artist="Beta", title="Second Song"),
+            Track(path=Path("c.mp3"), artist="Gamma", title="Third Song"),
+            Track(path=Path("d.mp3"), artist="Beta", title="Fourth Song"),
+        ]
+        app = App(tracks, discord_id="")
+        app.handle_key("l")
+        self.assertEqual(app.playlist_matches, [0, 1, 2, 3])
+
+        for char in "beta":
+            app.handle_key(char)
+        self.assertEqual(app.playlist_query, "beta")
+        self.assertEqual(app.playlist_matches, [1, 3])
+        self.assertEqual(app.playlist_index, 1)
+
+        app.handle_key("down")
+        self.assertEqual(app.playlist_index, 3)
+        app.handle_key("up")
+        self.assertEqual(app.playlist_index, 1)
+
+        app.handle_key("backspace")
+        self.assertEqual(app.playlist_query, "bet")
+        self.assertEqual(app.playlist_matches, [1, 3])
+
+        app.handle_key("esc")
+        self.assertEqual(app.playlist_query, "")
+        self.assertEqual(app.playlist_matches, [0, 1, 2, 3])
+        self.assertIsNotNone(app.playlist_index)
+
+        app.handle_key("esc")
+        self.assertIsNone(app.playlist_index)
+
+    def test_playlist_search_finds_artist_and_reports_no_matches(self) -> None:
+        tracks = [
+            Track(path=Path("a.mp3"), artist="Alpha", title="First Song"),
+            Track(path=Path("b.mp3"), artist="Beta", title="Second Song"),
+        ]
+        app = App(tracks, discord_id="")
+        app.handle_key("l")
+        for char in "alpha":
+            app.handle_key(char)
+        self.assertEqual(app.playlist_matches, [0])
+
+        app.handle_key("esc")
+        for char in "zzz":
+            app.handle_key(char)
+        self.assertEqual(app.playlist_matches, [])
+        app.handle_key("enter")
+        self.assertIsNotNone(app.playlist_index)
+
 
 if __name__ == "__main__":
     unittest.main()

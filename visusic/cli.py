@@ -10,6 +10,7 @@ from pathlib import Path
 from . import __version__
 from .app import App
 from .discord import load_client_id, save_client_id, valid_client_id
+from .effects import effect_names
 from .equalizer import CUSTOM_NAME, eq_names
 from .library import scan
 from .player import AudioError
@@ -40,6 +41,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--eq", choices=eq_names() + [CUSTOM_NAME], default=None,
         help="audio preset for this run (default: saved preset, or flat)",
+    )
+    parser.add_argument(
+        "--effect", choices=effect_names(), default=None,
+        help="background effect for this run (default: saved effect, or none)",
     )
     parser.add_argument(
         "--discord-id", default=None, metavar="ID",
@@ -101,6 +106,7 @@ def main(argv: list[str] | None = None) -> int:
             volume=max(0, min(100, args.volume)) / 100.0,
             theme=args.theme,
             eq=args.eq,
+            effect=args.effect,
             discord_id=discord_id,
         )
         app.run()

@@ -5,11 +5,13 @@ import unittest
 
 import numpy as np
 
+from visusic.effects import Background
 from visusic.equalizer import EQ_LIST, custom_preset
 from visusic.lrc import parse
 from visusic.theme import THEME_LIST, get_theme
-from visusic.ui import (EQEditorView, Frame, PlaylistRow, PlaylistView,
-                        fit_text, render, text_width)
+from visusic.ui import (EQEditorView, Frame, HelpView, PlaylistRow,
+                        PlaylistView, SettingsRow, SettingsView, fit_text,
+                        render, text_width)
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -207,6 +209,94 @@ class LayoutTests(unittest.TestCase):
             self.assertIn("Esc", text)
             for line in lines:
                 self.assertEqual(text_width(plain(line)), width)
+
+
+    def test_playlist_search_filters_rows(self) -> None:
+        rows = [
+            PlaylistRow(index=0, title="Midnight Drive", artist="Neon Waves"),
+            PlaylistRow(index=1, title="City Lights", artist="Stars"),
+            PlaylistRow(index=2, title="My Time", artist="Arcade"),
+            PlaylistRow(index=3, title="City Lights II", artist="Stars"),
+        ]
+        view = PlaylistView(rows=rows, selected=3, current=0,
+                            matches=[1, 3], query="city")
+        lines = render(frame_with(), 100, 30, get_theme("aurora"),
+                       playlist=view)
+        text = plain("\n".join(lines))
+        self.assertIn("PLAYLIST · 2/4", text)
+        self.assertIn("City Lights", text)
+        self.assertNotIn("01 / 4", text)
+        self.assertIn("clear", text)
+        for line in lines:
+            self.assertEqual(text_width(plain(line)), 100)
+
+    def test_playlist_search_without_matches(self) -> None:
+        rows = [PlaylistRow(index=0, title="Midnight Drive", artist="Neon")]
+        view = PlaylistView(rows=rows, selected=0, current=0,
+                            matches=[], query="zzz")
+        for width, height in ((100, 30), (40, 12), (28, 8)):
+            lines = render(frame_with(), width, height,
+                           get_theme("matrix"), playlist=view)
+            text = plain("\n".join(lines))
+            self.assertIn("no matches", text)
+            for line in lines:
+                self.assertEqual(text_width(plain(line)), width)
+
+    def test_settings_menu(self) -> None:
+        rows = [
+            SettingsRow("Sound", "Bass Boost", "presets and manual EQ"),
+            SettingsRow("Theme", "Aurora", "live preview"),
+            SettingsRow("Background", "Waves", "reacts to bass"),
+            SettingsRow("Key bindings", "view", "all hotkeys"),
+        ]
+        for width, height in ((100, 30), (60, 14), (40, 10), (28, 8)):
+            lines = render(frame_with(), width, height,
+                           get_theme("aurora"),
+                           settings=SettingsView(rows=rows, selected=2))
+            text = plain("\n".join(lines))
+            self.assertEqual(len(lines), height)
+            self.assertIn("SETTINGS", text)
+            self.assertIn("Background", text)
+            self.assertIn("Wav", text)
+            self.assertIn("Esc", text)
+            for line in lines:
+                self.assertEqual(text_width(plain(line)), width)
+
+    def test_help_overlay(self) -> None:
+        lines = HelpView(
+            lines=[("", "PLAYBACK"), ("space", "pause / resume"),
+                   ("l / tab", "open playlist"), ("", "SETTINGS"),
+                   ("s", "settings menu")],
+            scroll=0,
+        )
+        for width, height in ((100, 30), (50, 12), (28, 8)):
+            rendered = render(frame_with(), width, height,
+                              get_theme("ice"), help_view=lines)
+            text = plain("\n".join(rendered))
+            self.assertIn("KEY BINDINGS", text)
+            self.assertIn("PLAYBACK", text)
+            self.assertIn("space", text)
+            self.assertIn("Esc", text)
+            for line in rendered:
+                self.assertEqual(text_width(plain(line)), width)
+
+    def test_background_effect_is_rendered(self) -> None:
+        background = Background("waves")
+        for _ in range(20):
+            background.update(1 / 30, 100, 30,
+                              np.linspace(0.2, 1.0, 40, dtype=np.float32))
+        lines = render(frame_with(), 100, 30, get_theme("aurora"),
+                       background=background)
+        text = plain("\n".join(lines))
+        self.assertTrue("~" in text or "≈" in text)
+        for line in lines:
+            self.assertEqual(text_width(plain(line)), 100)
+
+    def test_footer_shows_settings_not_theme(self) -> None:
+        footer = plain(render(frame_with(), 100, 30)[-1])
+        self.assertIn("settings", footer)
+        self.assertNotIn("theme", footer)
+        self.assertNotIn(" eq ", footer)
 
 
 class TextTests(unittest.TestCase):
