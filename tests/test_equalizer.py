@@ -4,7 +4,8 @@ import unittest
 
 import numpy as np
 
-from visusic.equalizer import (BANDS, EQ_LIST, PRESETS, TAPS, design_taps,
+from visusic.equalizer import (BANDS, CUSTOM_NAME, EQ_LIST, MAX_GAIN, PRESETS,
+                               TAPS, clamp_gains, custom_preset, design_taps,
                                eq_names, get_eq)
 
 
@@ -42,6 +43,27 @@ class EqualizerTests(unittest.TestCase):
                 index = int(np.argmin(np.abs(freqs - frequency)))
                 self.assertLess(abs(float(got[index]) - float(expected)), 2.5,
                                 (name, frequency, got[index], expected))
+
+    def test_clamp_gains_pads_and_clamps(self) -> None:
+        self.assertEqual(clamp_gains([]), (0.0,) * len(BANDS))
+        self.assertEqual(len(clamp_gains([1, 2])), len(BANDS))
+        values = clamp_gains([99, -99, "3.14", None, -0.04, 0.06])
+        self.assertEqual(values[:6], (MAX_GAIN, -MAX_GAIN, 3.1, 0.0, 0.0, 0.1))
+        self.assertTrue(all(isinstance(value, float) for value in values))
+
+    def test_custom_preset_applies_headroom(self) -> None:
+        preset = custom_preset([6, 4, 0, 0, 0, 0, 0, 0, 0, 0])
+        self.assertEqual(preset.name, CUSTOM_NAME)
+        self.assertEqual(preset.label, "Custom")
+        self.assertEqual(preset.gains, (6, 4, 0, 0, 0, 0, 0, 0, 0, 0))
+        self.assertEqual(preset.preamp, -3.0)
+
+        quiet = custom_preset([-6, -3, 0, 0, 0, 0, 0, 0, 0, 0])
+        self.assertEqual(quiet.preamp, 0.0)
+
+        taps = design_taps(preset, 48000)
+        self.assertIsNotNone(taps)
+        self.assertIsNone(design_taps(custom_preset([]), 48000))
 
 
 if __name__ == "__main__":

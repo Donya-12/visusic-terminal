@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .equalizer import EQ_LIST
+from .equalizer import BANDS, EQ_LIST, MAX_GAIN, clamp_gains
 from .lrc import Lyrics
 from .theme import (
     Color,
@@ -45,7 +45,7 @@ _FULL_HINT = (
     ("[ ]", " sync  "),
     ("t", " theme  "),
     ("l", " list  "),
-    ("e", " eq  "),
+    ("e/m", " eq  "),
     ("q", " quit"),
 )
 _SHORT_HINT = (
@@ -92,6 +92,25 @@ class PlaylistView:
     rows: list[PlaylistRow]
     selected: int
     current: int
+
+
+@dataclass
+class EQEditorView:
+    gains: list[float]
+    band: int = 0
+    label: str = "Custom"
+
+
+def _fmt_gain(value: float) -> str:
+    if abs(value) < 0.05:
+        return "0"
+    text = f"{value:+.1f}"
+    return text[:-2] if text.endswith(".0") else text
+
+
+def _band_label(index: int) -> str:
+    hertz = BANDS[index]
+    return f"{hertz // 1000}k" if hertz >= 1000 else str(hertz)
 
 
 # --------------------------------------------------------------------- canvas
@@ -656,8 +675,9 @@ def _draw_playlist(canvas: Canvas, theme: Theme, view: PlaylistView) -> None:
     draw_segments(canvas, x + 2, footer_y, segments, box_w - 4)
 
 
-def _draw_eq_menu(canvas: Canvas, theme: Theme, selected: int) -> None:
-    presets = EQ_LIST
+def _draw_eq_menu(canvas: Canvas, theme: Theme, selected: int,
+                  presets=None) -> None:
+    presets = tuple(presets) if presets else EQ_LIST
     selected = max(0, min(len(presets) - 1, int(selected)))
     box_w = min(64, max(26, canvas.w - 4))
     rows = min(len(presets), max(2, canvas.h - 4))
@@ -692,10 +712,17 @@ def _draw_eq_menu(canvas: Canvas, theme: Theme, selected: int) -> None:
                    theme.text if is_selected else theme.dim2)
 
     footer_y = y + box_h - 2
-    if box_w >= 48:
+    if box_w >= 56:
         segments = [
-            ("↑↓", theme.accent, True), (" listen   ", theme.dim, False),
-            ("Enter", theme.accent, True), (" apply   ", theme.dim, False),
+            ("↑↓", theme.accent, True), (" listen  ", theme.dim, False),
+            ("Enter", theme.accent, True), (" apply  ", theme.dim, False),
+            ("M", theme.accent, True), (" edit  ", theme.dim, False),
+            ("Esc", theme.accent, True), (" cancel", theme.dim, False),
+        ]
+    elif box_w >= 44:
+        segments = [
+            ("↑↓", theme.accent, True), (" listen  ", theme.dim, False),
+            ("Enter", theme.accent, True), (" apply  ", theme.dim, False),
             ("Esc", theme.accent, True), (" cancel", theme.dim, False),
         ]
     else:
@@ -707,12 +734,201 @@ def _draw_eq_menu(canvas: Canvas, theme: Theme, selected: int) -> None:
     draw_segments(canvas, x + 2, footer_y, segments, box_w - 4)
 
 
+def _dialog_box(canvas: Canvas, theme: Theme, x: int, y: int,
+                box_w: int, box_h: int) -> None:
+    canvas.rect(x, y, x + box_w, y + box_h)
+    canvas.put(x, y, "┌" + "─" * (box_w - 2) + "┐", theme.accent_dim)
+    for row in range(y + 1, y + box_h - 1):
+        canvas.put(x, row, "│", theme.accent_dim)
+        canvas.put(x + box_w - 1, row, "│", theme.accent_dim)
+    canvas.put(x, y + box_h - 1, "└" + "─" * (box_w - 2) + "┘",
+               theme.accent_dim)
+
+
+def _eq_editor_footer(canvas: Canvas, theme: Theme, x: int, y: int,
+                      box_w: int) -> None:
+    if box_w >= 75:
+        segments = [
+            ("↑↓", theme.accent, True), (" band  ", theme.dim, False),
+            ("←→", theme.accent, True), (" ±0.5  ", theme.dim, False),
+            ("PgUp/PgDn", theme.accent, True), (" ±3  ", theme.dim, False),
+            ("0", theme.accent, True), (" reset  ", theme.dim, False),
+            ("R", theme.accent, True), (" all  ", theme.dim, False),
+            ("Enter", theme.accent, True), (" save  ", theme.dim, False),
+            ("Esc", theme.accent, True), (" cancel", theme.dim, False),
+        ]
+    elif box_w >= 54:
+        segments = [
+            ("↑↓", theme.accent, True), (" band  ", theme.dim, False),
+            ("←→", theme.accent, True), (" ±0.5  ", theme.dim, False),
+            ("0", theme.accent, True), (" reset  ", theme.dim, False),
+            ("Enter", theme.accent, True), (" save  ", theme.dim, False),
+            ("Esc", theme.accent, True), (" cancel", theme.dim, False),
+        ]
+    elif box_w >= 30:
+        segments = [
+            ("↑↓", theme.accent, True), (" · ", theme.dim, False),
+            ("←→", theme.accent, True), (" · ", theme.dim, False),
+            ("Enter", theme.accent, True), (" save  ", theme.dim, False),
+            ("Esc", theme.accent, True),
+        ]
+    else:
+        segments = [
+            ("↑↓", theme.accent, True), (" ", theme.dim, False),
+            ("←→", theme.accent, True), (" ", theme.dim, False),
+            ("Enter", theme.accent, True), (" ", theme.dim, False),
+            ("Esc", theme.accent, True),
+        ]
+    draw_segments(canvas, x + 2, y, segments, box_w - 4)
+
+
+def _draw_eq_editor_vertical(canvas: Canvas, theme: Theme,
+                             gains: list[float], selected: int,
+                             box_w: int) -> None:
+    rows = 9
+    box_h = rows + 8
+    x = max(0, (canvas.w - box_w) // 2)
+    y = max(0, (canvas.h - box_h) // 2)
+    _dialog_box(canvas, theme, x, y, box_w, box_h)
+
+    canvas.put(x + 2, y + 1, "CUSTOM EQUALIZER", theme.accent, True)
+    preamp = -max(0.0, max(gains)) * 0.5
+    right = f"preamp {preamp:.1f} dB"
+    if box_w >= text_width("CUSTOM EQUALIZER") + text_width(right) + 8:
+        canvas.put(x + box_w - 2 - text_width(right), y + 1, right,
+                   theme.dim2)
+
+    plot_x = x + 8
+    plot_right = x + box_w - 2
+    plot_w = plot_right - plot_x
+    slot = max(2, plot_w // len(gains))
+    offset = plot_x + max(0, (plot_w - slot * len(gains)) // 2)
+    zero = (rows - 1) // 2
+
+    for label, row in (("+12", 0), ("+6", 2), ("0", 4),
+                       ("-6", 6), ("-12", 8)):
+        canvas.put(x + 2 + (4 - text_width(label)), y + 3 + row,
+                   label, theme.dim2)
+    canvas.hline(y + 3 + zero, plot_x, plot_right, "─", theme.dim2)
+
+    for i, value in enumerate(gains):
+        col_x = offset + i * slot
+        bar_w = 2 if slot >= 3 else 1
+        bar_x = col_x + max(0, (slot - bar_w) // 2)
+        level = int(round((MAX_GAIN - value) / (2 * MAX_GAIN) * (rows - 1)))
+        level = max(0, min(rows - 1, level))
+        if value > 0.04 and level >= zero:
+            level = max(0, zero - 1)
+        elif value < -0.04 and level <= zero:
+            level = min(rows - 1, zero + 1)
+        top, bottom = sorted((level, zero))
+        is_selected = i == selected
+        if value >= 0:
+            color = theme.eq_color(0.5 + 0.5 * value / MAX_GAIN)
+        else:
+            color = mix(theme.dim2, theme.accent_dim, 0.6)
+        if is_selected:
+            color = theme.accent
+        for row in range(top, bottom + 1):
+            canvas.put(bar_x, y + 3 + row, "█" * bar_w, color,
+                       is_selected)
+
+        label = fit_text(_band_label(i), slot)
+        label_x = col_x + max(0, (slot - text_width(label)) // 2)
+        canvas.put(label_x, y + 12, label,
+                   theme.accent if is_selected else theme.dim)
+
+        text = _fmt_gain(value)
+        if text_width(text) > slot:
+            text = _fmt_gain(float(round(value)))
+        text_x = col_x + max(0, (slot - text_width(text)) // 2)
+        canvas.put(text_x, y + 13, text,
+                   theme.white if is_selected else theme.dim2, is_selected)
+
+    _eq_editor_footer(canvas, theme, x, y + box_h - 2, box_w)
+
+
+def _draw_eq_editor_compact(canvas: Canvas, theme: Theme,
+                            gains: list[float], selected: int,
+                            box_w: int) -> None:
+    total = len(gains)
+    rows = min(total, max(2, canvas.h - 4))
+    box_h = rows + 4
+    x = max(0, (canvas.w - box_w) // 2)
+    y = max(0, (canvas.h - box_h) // 2)
+    _dialog_box(canvas, theme, x, y, box_w, box_h)
+
+    canvas.put(x + 2, y + 1, fit_text("CUSTOM EQUALIZER", box_w - 4),
+               theme.accent, True)
+    preamp = -max(0.0, max(gains)) * 0.5
+    right = f"preamp {preamp:.1f} dB"
+    if box_w >= 46:
+        canvas.put(x + box_w - 2 - text_width(right), y + 1, right,
+                   theme.dim2)
+
+    start = max(0, min(selected - rows // 2, total - rows))
+    meter_x = x + 8
+    gain_w = 5
+    meter_right = x + box_w - 3 - gain_w
+    meter_w = max(3, meter_right - meter_x)
+    gain_x = x + box_w - 2 - gain_w
+
+    for slot in range(rows):
+        i = start + slot
+        value = gains[i]
+        row_y = y + 2 + slot
+        is_selected = i == selected
+        if is_selected:
+            canvas.put(x + 1, row_y, "▌", theme.accent, True)
+        canvas.put(x + 3, row_y, fit_text(_band_label(i), 4),
+                   theme.white if is_selected else theme.text, is_selected)
+
+        center = meter_x + meter_w // 2
+        half = max(1, min(center - meter_x,
+                          meter_x + meter_w - 1 - center))
+        steps = int(round(abs(value) / MAX_GAIN * half))
+        if abs(value) > 0.04:
+            steps = max(1, steps)
+        if value >= 0:
+            bar_color = (theme.eq_color(0.55 + 0.25 * value / MAX_GAIN)
+                         if not is_selected else theme.accent)
+        else:
+            bar_color = (theme.accent if is_selected
+                         else mix(theme.dim2, theme.accent_dim, 0.6))
+        for k in range(meter_x, meter_x + meter_w):
+            canvas.put(k, row_y, "─", theme.dim2)
+        canvas.put(center, row_y, "┼", theme.dim2)
+        direction = 1 if value >= 0 else -1
+        for k in range(1, steps + 1):
+            canvas.put(center + direction * k, row_y, "█", bar_color,
+                       is_selected)
+
+        text = _fmt_gain(value)
+        canvas.put(gain_x + gain_w - text_width(text), row_y, text,
+                   theme.white if is_selected else theme.dim2, is_selected)
+
+    _eq_editor_footer(canvas, theme, x, y + box_h - 2, box_w)
+
+
+def _draw_eq_editor(canvas: Canvas, theme: Theme,
+                    view: EQEditorView) -> None:
+    gains = list(clamp_gains(view.gains))
+    selected = max(0, min(len(gains) - 1, int(view.band)))
+    box_w = min(78, max(24, canvas.w - 4))
+    if canvas.h >= 18 and canvas.w >= 58 and box_w >= 54:
+        _draw_eq_editor_vertical(canvas, theme, gains, selected, box_w)
+    else:
+        _draw_eq_editor_compact(canvas, theme, gains, selected, box_w)
+
+
 # -------------------------------------------------------------------- public
 def render(frame: Frame, width: int, height: int,
            theme: Theme | str | None = None,
            menu: int | None = None,
            playlist: PlaylistView | None = None,
-           eq_menu: int | None = None) -> list[str]:
+           eq_menu: int | None = None,
+           eq_presets=None,
+           eq_editor: EQEditorView | None = None) -> list[str]:
     if isinstance(theme, str):
         theme = get_theme(theme)
     if theme is None:
@@ -759,6 +975,9 @@ def render(frame: Frame, width: int, height: int,
         _draw_playlist(canvas, theme, playlist)
     elif eq_menu is not None:
         canvas.dim(0.35)
-        _draw_eq_menu(canvas, theme, eq_menu)
+        _draw_eq_menu(canvas, theme, eq_menu, eq_presets)
+    elif eq_editor is not None:
+        canvas.dim(0.35)
+        _draw_eq_editor(canvas, theme, eq_editor)
 
     return canvas.to_lines()

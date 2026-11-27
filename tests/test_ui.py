@@ -5,10 +5,11 @@ import unittest
 
 import numpy as np
 
+from visusic.equalizer import EQ_LIST, custom_preset
 from visusic.lrc import parse
 from visusic.theme import THEME_LIST, get_theme
-from visusic.ui import (Frame, PlaylistRow, PlaylistView, fit_text, render,
-                        text_width)
+from visusic.ui import (EQEditorView, Frame, PlaylistRow, PlaylistView,
+                        fit_text, render, text_width)
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -167,14 +168,43 @@ class LayoutTests(unittest.TestCase):
                 self.assertEqual(text_width(plain(line)), width)
 
     def test_eq_menu(self) -> None:
+        presets = EQ_LIST + (custom_preset((4, 3, 2, 1, 0, 0, 1, 2, 3, 4)),)
         for width, height in ((100, 30), (60, 12), (28, 8)):
             lines = render(frame_with(), width, height,
-                           get_theme("aurora"), eq_menu=1)
+                           get_theme("aurora"), eq_menu=1,
+                           eq_presets=presets)
             text = plain("\n".join(lines))
             self.assertEqual(len(lines), height)
             self.assertIn("SOUND PRESET", text)
             self.assertIn("Bass Boost", text)
             self.assertIn("Enter", text)
+            for line in lines:
+                self.assertEqual(text_width(plain(line)), width)
+
+    def test_eq_menu_shows_custom_and_edit_hint(self) -> None:
+        presets = EQ_LIST + (custom_preset((4, 3, 2, 1, 0, 0, 1, 2, 3, 4)),)
+        lines = render(frame_with(), 100, 30, get_theme("aurora"),
+                       eq_menu=6, eq_presets=presets)
+        text = plain("\n".join(lines))
+        self.assertIn("Custom", text)
+        self.assertIn("ручная настройка", text)
+        self.assertIn("edit", text)
+
+    def test_eq_editor(self) -> None:
+        gains = [6, 5, 3, 0, -1, 1, 2, 4, 3, -2]
+        for width, height in ((100, 30), (70, 22), (60, 16),
+                              (40, 10), (28, 8)):
+            view = EQEditorView(gains=gains, band=1)
+            lines = render(frame_with(), width, height,
+                           get_theme("aurora"), eq_editor=view)
+            text = plain("\n".join(lines))
+            self.assertEqual(len(lines), height)
+            self.assertIn("CUSTOM EQUALIZER", text)
+            self.assertIn("31", text)
+            if height >= 18:
+                self.assertIn("16k", text)
+            self.assertIn("Enter", text)
+            self.assertIn("Esc", text)
             for line in lines:
                 self.assertEqual(text_width(plain(line)), width)
 

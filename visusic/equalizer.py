@@ -12,6 +12,8 @@ import numpy as np
 
 BANDS = (31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000)
 TAPS = 1025
+MAX_GAIN = 12.0
+CUSTOM_NAME = "custom"
 
 
 @dataclass(frozen=True)
@@ -65,6 +67,27 @@ def get_eq(name: str | None) -> EQPreset:
 
 def eq_names() -> list[str]:
     return list(PRESETS)
+
+
+def clamp_gains(gains) -> tuple[float, ...]:
+    values = list(gains)[:len(BANDS)]
+    values += [0.0] * (len(BANDS) - len(values))
+    result = []
+    for value in values:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            number = 0.0
+        number = round(max(-MAX_GAIN, min(MAX_GAIN, number)), 1)
+        result.append(0.0 if number == 0 else number)
+    return tuple(result)
+
+
+def custom_preset(gains, label: str = "Custom",
+                  description: str = "ручная настройка") -> EQPreset:
+    values = clamp_gains(gains)
+    preamp = -max(0.0, max(values)) * 0.5
+    return EQPreset(CUSTOM_NAME, label, description, values, preamp)
 
 
 def design_taps(preset: EQPreset, samplerate: int,

@@ -1,3 +1,3 @@
 """VisuSic Terminal — a tiny music visualizer for the Windows console."""
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"

@@ -9,7 +9,8 @@ from pathlib import Path
 from . import metadata, term
 from .discord import DiscordPresence, load_client_id
 from .keys import KeyReader
-from .equalizer import EQ_LIST, get_eq
+from .equalizer import (BANDS, CUSTOM_NAME, EQ_LIST, EQPreset, MAX_GAIN,
+                        clamp_gains, custom_preset, get_eq)
 from .library import Track
 from .lrc import Lyrics, find_for_audio, load as load_lyrics
 from .player import AudioError, Player
@@ -17,7 +18,8 @@ from .smtc import MediaSession
 from .spectrum import Spectrum, bands_for_width
 from .theme import (THEME_LIST, get_theme, load_setting, load_theme_name,
                     save_setting, save_theme_name)
-from .ui import (Frame, PlaylistRow, PlaylistView, fmt_time, render)
+from .ui import (EQEditorView, Frame, PlaylistRow, PlaylistView, fmt_time,
+                 render)
 
 
 class App:
@@ -36,8 +38,17 @@ class App:
         self.lyrics: Lyrics | None = None
         self.lyric_offset = 0.0
         self.theme = get_theme(theme or load_theme_name())
-        self.eq = get_eq(eq or load_setting("eq", "flat"))
-        self.player.set_eq(self.eq.name)
+        saved_eq = eq if eq is not None else load_setting("eq", "flat")
+        if not isinstance(saved_eq, str):
+            saved_eq = "flat"
+        saved_gains = load_setting("eq_gains", ())
+        self.custom_gains = clamp_gains(
+            saved_gains if isinstance(saved_gains, (list, tuple)) else ()
+        )
+        self.custom_eq = custom_preset(self.custom_gains)
+        self.eq = (self.custom_eq if saved_eq == CUSTOM_NAME
+                   else get_eq(saved_eq))
+        self.player.set_eq_preset(self.eq)
         self.discord_id = (discord_id if discord_id is not None
                            else load_client_id())
         self.discord: DiscordPresence | None = None
@@ -45,7 +56,10 @@ class App:
         self.menu_index: int | None = None
         self._menu_original: str | None = None
         self.eq_menu_index: int | None = None
-        self._eq_original: str | None = None
+        self._eq_original: EQPreset | None = None
+        self.eq_edit_band: int | None = None
+        self.eq_edit_gains: list[float] = []
+        self._eq_edit_original: EQPreset | None = None
 
         self.playlist_index: int | None = None
         self.playlist_rows: list[PlaylistRow] = []
@@ -54,14 +68,6 @@ class App:
         self.smtc: MediaSession | None = None
         self._smtc_error = ""
         self._smtc_warned = False
-
-        self._lyrics_cache: dict[Path, Lyrics | None] = {}
-        self._spectrum = Spectrum(self.player.sr, bands_for_width(100))
-        self._running = True
-        self._status = ""
-        self._status_until = 0.0
-        self._size = (0, 0)
-        self._dt = 1.0 / self.fps
 
         self._lyrics_cache: dict[Path, Lyrics | None] = {}
         self._spectrum = Spectrum(self.player.sr, bands_for_width(100))
@@ -358,26 +364,35 @@ class App:
                 self._close_theme_menu(True)
 
     # ---------------------------------------------------------------- audio EQ
+    @property
+    def eq_presets(self) -> tuple[EQPreset, ...]:
+        return EQ_LIST + (self.custom_eq,)
+
     def _open_eq_menu(self) -> None:
-        self._eq_original = self.eq.name
-        names = [preset.name for preset in EQ_LIST]
+        self._eq_original = self.eq
+        names = [preset.name for preset in self.eq_presets]
         self.eq_menu_index = (names.index(self.eq.name)
                               if self.eq.name in names else 0)
 
     def _preview_eq(self, index: int) -> None:
-        self.eq_menu_index = index % len(EQ_LIST)
-        self.eq = EQ_LIST[self.eq_menu_index]
-        self.player.set_eq(self.eq.name)
+        presets = self.eq_presets
+        self.eq_menu_index = index % len(presets)
+        self.eq = presets[self.eq_menu_index]
+        self.player.set_eq_preset(self.eq)
 
     def _close_eq_menu(self, apply: bool) -> None:
         if apply:
             saved = save_setting("eq", self.eq.name)
+            if self.eq.name == CUSTOM_NAME:
+                saved = (save_setting(
+                    "eq_gains", [round(gain, 1) for gain in self.custom_gains]
+                ) and saved)
             suffix = "" if saved else " · config not saved"
             self.toast(f"sound · {self.eq.label}{suffix}", 2.0)
         else:
-            if self._eq_original:
-                self.eq = get_eq(self._eq_original)
-            self.player.set_eq(self.eq.name)
+            if self._eq_original is not None:
+                self.eq = self._eq_original
+            self.player.set_eq_preset(self.eq)
             self.toast(f"sound · {self.eq.label}", 1.2)
         self.eq_menu_index = None
         self._eq_original = None
@@ -395,9 +410,84 @@ class App:
             self._running = False
         elif len(key) == 1 and key.isdigit():
             index = int(key) - 1
-            if 0 <= index < len(EQ_LIST):
+            if 0 <= index < len(self.eq_presets):
                 self._preview_eq(index)
                 self._close_eq_menu(True)
+
+    # ---------------------------------------------------------- manual EQ
+    def _open_eq_editor(self) -> None:
+        self._eq_edit_original = self.eq
+        self.eq_edit_gains = [float(gain) for gain in self.eq.gains]
+        self.eq_edit_band = 0
+        self._preview_eq_editor()
+
+    def _preview_eq_editor(self) -> None:
+        if self.eq_edit_band is None:
+            return
+        self.eq = custom_preset(self.eq_edit_gains)
+        self.player.set_eq_preset(self.eq)
+
+    def _set_eq_band(self, value: float) -> None:
+        if self.eq_edit_band is None:
+            return
+        value = max(-MAX_GAIN, min(MAX_GAIN, round(value, 1)))
+        self.eq_edit_gains[self.eq_edit_band] = value
+        self._preview_eq_editor()
+
+    def _nudge_eq_band(self, delta: float) -> None:
+        if self.eq_edit_band is None:
+            return
+        self._set_eq_band(self.eq_edit_gains[self.eq_edit_band] + delta)
+
+    def _save_eq_editor(self) -> None:
+        self.custom_gains = clamp_gains(self.eq_edit_gains)
+        self.custom_eq = custom_preset(self.custom_gains)
+        self.eq = self.custom_eq
+        saved = save_setting("eq", CUSTOM_NAME)
+        saved = save_setting("eq_gains",
+                             [round(gain, 1) for gain in self.custom_gains]
+                             ) and saved
+        self.eq_edit_band = None
+        self._eq_edit_original = None
+        suffix = "" if saved else " · config not saved"
+        self.toast(f"custom eq saved{suffix}", 2.2)
+
+    def _close_eq_editor(self, apply: bool) -> None:
+        if apply:
+            self._save_eq_editor()
+            return
+        if self._eq_edit_original is not None:
+            self.eq = self._eq_edit_original
+        self.player.set_eq_preset(self.eq)
+        self.eq_edit_band = None
+        self._eq_edit_original = None
+        self.toast(f"sound · {self.eq.label}", 1.2)
+
+    def _handle_eq_editor_key(self, key: str) -> None:
+        if key == "esc":
+            self._close_eq_editor(False)
+        elif key in ("q", "ctrl-c"):
+            self._close_eq_editor(False)
+            self._running = False
+        elif key == "up":
+            self.eq_edit_band = (self.eq_edit_band - 1) % len(BANDS)
+        elif key == "down":
+            self.eq_edit_band = (self.eq_edit_band + 1) % len(BANDS)
+        elif key == "left":
+            self._nudge_eq_band(-0.5)
+        elif key == "right":
+            self._nudge_eq_band(0.5)
+        elif key == "pageup":
+            self._nudge_eq_band(3.0)
+        elif key == "pagedown":
+            self._nudge_eq_band(-3.0)
+        elif key == "0":
+            self._set_eq_band(0.0)
+        elif key == "r":
+            self.eq_edit_gains = [0.0] * len(BANDS)
+            self._preview_eq_editor()
+        elif key == "enter":
+            self._close_eq_editor(True)
 
     def _seek_by(self, delta: float, label: str) -> None:
         target = max(0.0, min(self.duration, self.player.position() + delta))
@@ -406,6 +496,9 @@ class App:
         self._sync_discord(force=True)
 
     def handle_key(self, key: str) -> None:
+        if self.eq_edit_band is not None:
+            self._handle_eq_editor_key(key)
+            return
         if self.menu_index is not None:
             self._handle_theme_menu_key(key)
             return
@@ -424,6 +517,8 @@ class App:
             self._open_playlist()
         elif key == "e":
             self._open_eq_menu()
+        elif key == "m":
+            self._open_eq_editor()
         elif key == "space":
             self.player.toggle()
         elif key == "left":
@@ -528,10 +623,18 @@ class App:
                         selected=self.playlist_index,
                         current=self.index,
                     )
+                eq_editor = None
+                if self.eq_edit_band is not None:
+                    eq_editor = EQEditorView(
+                        gains=list(self.eq_edit_gains),
+                        band=self.eq_edit_band,
+                    )
                 lines = render(self._make_frame(), width, height,
                                self.theme, menu=self.menu_index,
                                playlist=playlist,
-                               eq_menu=self.eq_menu_index)
+                               eq_menu=self.eq_menu_index,
+                               eq_presets=self.eq_presets,
+                               eq_editor=eq_editor)
                 prefix = "\x1b[2J\x1b[H" if first else "\x1b[H"
                 term.write(prefix + "\n".join(lines))
                 first = False

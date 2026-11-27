@@ -10,7 +10,7 @@ from pathlib import Path
 from . import __version__
 from .app import App
 from .discord import load_client_id, save_client_id, valid_client_id
-from .equalizer import eq_names
+from .equalizer import CUSTOM_NAME, eq_names
 from .library import scan
 from .player import AudioError
 from .theme import theme_names
@@ -38,7 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="color theme for this run (default: saved theme, or aurora)",
     )
     parser.add_argument(
-        "--eq", choices=eq_names(), default=None,
+        "--eq", choices=eq_names() + [CUSTOM_NAME], default=None,
         help="audio preset for this run (default: saved preset, or flat)",
     )
     parser.add_argument(

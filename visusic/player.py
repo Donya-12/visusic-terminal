@@ -17,7 +17,7 @@ import numpy as np
 import sounddevice as sd
 import soundfile as sf
 
-from .equalizer import design_taps, get_eq
+from .equalizer import EQPreset, design_taps, get_eq
 from .library import Track
 
 
@@ -218,7 +218,9 @@ class Player:
                 self._finished = True
 
     def set_eq(self, name: str) -> None:
-        preset = get_eq(name)
+        self.set_eq_preset(get_eq(name))
+
+    def set_eq_preset(self, preset: EQPreset) -> None:
         taps = design_taps(preset, self.sr)
         if taps is None:
             with self._lock:

@@ -15,10 +15,12 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from visusic.equalizer import EQ_LIST, custom_preset  # noqa: E402
 from visusic.lrc import parse  # noqa: E402
 from visusic.spectrum import bands_for_width  # noqa: E402
 from visusic.theme import get_theme, theme_names  # noqa: E402
-from visusic.ui import Frame, PlaylistRow, PlaylistView, render  # noqa: E402
+from visusic.ui import (EQEditorView, Frame, PlaylistRow, PlaylistView,
+                        render)  # noqa: E402
 
 ANSI = re.compile(r"\x1b\[([0-9;]*)m")
 SAMPLE_LRC = """[ar:Неоновые волны]
@@ -151,6 +153,8 @@ def main() -> None:
                         help="show the playlist overlay")
     parser.add_argument("--eq-menu", type=int, default=None,
                         help="show the sound preset menu with this selected")
+    parser.add_argument("--eq-editor", type=int, default=None, metavar="BAND",
+                        help="show the manual EQ editor with this band selected")
     parser.add_argument("--out", default="docs/preview.html")
     parser.add_argument("--title", default="VisuSic Terminal — preview")
     args = parser.parse_args()
@@ -159,8 +163,17 @@ def main() -> None:
     frame = sample_frame(bands_for_width(width))
     theme = get_theme(args.theme)
     playlist = sample_playlist(theme) if args.playlist else None
+    presets = EQ_LIST + (custom_preset(
+        (4, 5, 3, 1, 0, -1, 1, 3, 2, -1)),)
+    editor = None
+    if args.eq_editor is not None:
+        editor = EQEditorView(
+            gains=[4, 5, 3, 1, 0, -1, 1, 3, 2, -1],
+            band=args.eq_editor,
+        )
     lines = render(frame, width, height, theme, menu=args.menu,
-                   playlist=playlist, eq_menu=args.eq_menu)
+                   playlist=playlist, eq_menu=args.eq_menu,
+                   eq_presets=presets, eq_editor=editor)
     body = ansi_to_html(lines)
     if args.menu is not None:
         args.title = f"{args.title} · themes"
@@ -168,6 +181,8 @@ def main() -> None:
         args.title = f"{args.title} · playlist"
     if args.eq_menu is not None:
         args.title = f"{args.title} · sound"
+    if args.eq_editor is not None:
+        args.title = f"{args.title} · manual eq"
 
     page = f"""<!doctype html>
 <html lang="ru">
