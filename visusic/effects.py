@@ -135,7 +135,7 @@ class Background:
                     self._rng.uniform(0, height - 1),
                     self._rng.uniform(1.2, 4.8),
                     self._rng.uniform(0, math.tau),
-                    self._rng.choice(("*", "·", "+", "❄")),
+                    self._rng.choice(("*", "·", "+")),
                 ])
         elif self._name == "rain":
             count = max(14, width // 2)

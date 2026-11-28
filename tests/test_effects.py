@@ -97,5 +97,12 @@ class BackgroundTests(unittest.TestCase):
         self.assertEqual(background.name, "none")
 
 
+    def test_snow_uses_plain_symbols(self) -> None:
+        background = self.run_effect("snow", np.ones(40))
+        text = draw_text(background)
+        self.assertNotIn("❄", text)
+        self.assertTrue(any(char in text for char in "*·+"))
+
+
 if __name__ == "__main__":
     unittest.main()

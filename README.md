@@ -143,7 +143,7 @@ python -m venv .venv
 | Эффект | Настроение | Реагирует на музыку |
 | --- | --- | --- |
 | `None` | чистый фон | — |
-| `Snow` | снежинки | нет |
+| `Snow` | снежинки из символов `*`, `·`, `+` | нет |
 | `Rain` | дождь | нет |
 | `Waves` | волны внизу | бас |
 | `Stars` | мерцающие звёзды | да |
@@ -408,7 +408,7 @@ fetch-lyrics.bat "C:\Music" --overwrite        :: перезаписать ст�
 | `visusic/fetch.py` | опциональный поиск `.lrc` на LRCLIB |
 | `visusic/covers.py` | опциональный поиск обложек на iTunes |
 
-Тесты (97 штук):
+Тесты (98 штук):
 
 ```bat
 .venv\Scripts\python -m unittest discover -s tests
